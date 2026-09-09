@@ -5,8 +5,9 @@
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
+import { presentDocument, qualificationGateItems } from "./leadAttachmentService.js";
 
-const { Opportunity, BusinessUnit, Referrer, User } = db;
+const { Opportunity, BusinessUnit, Referrer, User, Document } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -25,7 +26,7 @@ const LEAD_FIELDS = [
     "qualification", "qualificationAuthority", "qualificationTiming",
     "estimatedValue", "nextAction", "nextActionDueAt",
     "energyAnnualKwh", "energyHasBills", "energyNotes",
-    "leadSource", "referrerId", "involvementTier",
+    "leadSource", "referrerId", "involvementTier", "leadType",
     "estimatorId", "salespersonId", "notes",
 ];
 
@@ -33,6 +34,7 @@ const pickLeadFields = (payload) => {
     const picked = {};
     for (const field of LEAD_FIELDS) if (payload[field] !== undefined) picked[field] = payload[field];
     if (picked.energyHasBills !== undefined) picked.energyHasBills = Boolean(picked.energyHasBills);
+    if (picked.leadType === "") picked.leadType = null; // model validates the value otherwise
     for (const numeric of ["energyAnnualKwh", "estimatedValue"]) {
         if (picked[numeric] === "" || picked[numeric] === null) picked[numeric] = null;
         else if (picked[numeric] !== undefined && !Number.isFinite(Number(picked[numeric])))
@@ -116,6 +118,8 @@ export const listOpportunities = async ({
     return { rows, total: count, page: currentPage, pageSize: limit };
 };
 
+// The detail payload: the record, its people, and its documents (with the
+// download URL each — see leadAttachmentService.presentDocument).
 export const getOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"), {
         include: [
@@ -123,10 +127,31 @@ export const getOpportunity = async (id) => {
             { model: User, as: "leadOwner", attributes: ["id", "name"] },
             { model: User, as: "estimator", attributes: ["id", "name"] },
             { model: User, as: "salesperson", attributes: ["id", "name"] },
+            {
+                model: Document,
+                as: "documents",
+                include: [{ model: User, as: "uploader", attributes: ["id", "name"] }],
+            },
         ],
+        order: [[{ model: Document, as: "documents" }, "createdAt", "DESC"]],
     });
     if (!opportunity) throw httpError(404, "Opportunity not found");
-    return opportunity;
+    const plain = opportunity.get({ plain: true });
+    plain.documents = (plain.documents || []).map(presentDocument);
+    return plain;
+};
+
+// Marking a lead Qualified needs evidence from the ground: a logged client
+// meeting and a site photo or sketch (the prototype's rule). New leads
+// therefore start as Nurture unless the caller says otherwise — and cannot
+// start Qualified.
+const assertCanQualify = async (opportunity) => {
+    const missing = await qualificationGateItems(opportunity);
+    if (missing.length)
+        throw httpError(
+            400,
+            `Before marking the lead Qualified, add ${missing.join(" and ")} on the record`
+        );
 };
 
 export const createLead = async (payload = {}, actor) => {
@@ -135,6 +160,12 @@ export const createLead = async (payload = {}, actor) => {
 
     const fields = pickLeadFields(payload);
     if (!fields.customerLegalName?.trim()) throw httpError(400, "customerLegalName is required");
+    fields.qualification = fields.qualification ?? "nurture";
+    if (fields.qualification === "qualified")
+        throw httpError(
+            400,
+            "A new lead starts as Nurture — log a client meeting and attach a site photo or sketch on the record before marking it Qualified"
+        );
     fields.leadSource = fields.leadSource ?? "inbound";
     await normalizeSource(fields);
     fields.estimatorId = await assertUserExists(fields.estimatorId, "estimator");
@@ -165,6 +196,8 @@ export const updateLead = async (id, payload = {}, actor) => {
     const fields = pickLeadFields(payload);
     if (fields.customerLegalName !== undefined && !fields.customerLegalName?.trim())
         throw httpError(400, "customerLegalName cannot be blank");
+    if (fields.qualification === "qualified" && opportunity.qualification !== "qualified")
+        await assertCanQualify(opportunity);
     fields.leadSource = fields.leadSource ?? opportunity.leadSource;
     await normalizeSource(fields);
     if (fields.estimatorId !== undefined)

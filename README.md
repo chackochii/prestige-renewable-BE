@@ -151,6 +151,21 @@ All application code (`server.js`, `app.js`, models, routes) uses `import`/`expo
 
 All tables use UUID primary keys, snake_case columns, and foreign keys with cascade rules. Sequelize models live in `modules/<name>/model/` and are registered with their associations in `models/index.js`.
 
+## Lead pack attachments (meetings & documents)
+
+Leads are opportunities at stage 1. Besides the lead fields (`PATCH /api/opportunities/:id`), the lead pack carries a client-meeting log (JSONB on the row) and uploaded documents (`documents` table, files on disk under `UPLOAD_DIR`, default `./uploads`). Every mutation returns the refreshed opportunity, which includes `meetings[]` and `documents[]` (each document has a `fileUrl`).
+
+| Method | Route | Permission | Body |
+|---|---|---|---|
+| `POST` | `/api/opportunities/:id/meetings` | `leads.update` | `{ attendees, outcome?, nextStep?, at? }` |
+| `DELETE` | `/api/opportunities/:id/meetings/:meetingId` | `leads.update` | — |
+| `GET` | `/api/opportunities/:id/documents` | `leads.read` | — |
+| `POST` | `/api/opportunities/:id/documents` | `leads.update` | multipart: `files[]` (≤10 × 10 MB) + `type` (`site_photo`, `drawing`, `lead`, `energy_bill`, …), `stage?`, `label?` |
+| `DELETE` | `/api/opportunities/:id/documents/:docId` | `leads.update` | — |
+| `GET` | `/api/opportunities/:id/documents/:docId/file` | `leads.read` | serves the file; accepts `?token=<jwt>` (for `<img>`/links) and `?download=1` |
+
+**Qualification gate:** a lead can only be set to `qualification: "qualified"` once it has at least one meeting and one `site_photo` or `drawing` document; a new lead cannot be created already qualified (it defaults to `nurture`). Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
+
 ## Project structure
 
 ```
