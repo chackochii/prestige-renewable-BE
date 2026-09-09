@@ -1,5 +1,6 @@
 import {
     listUsers,
+    listDirectory,
     getUserForActor,
     getUserWithPermissions,
     createUser,
@@ -38,6 +39,13 @@ export const getAll = asyncHandler(async (req, res) => {
     );
 
     res.status(200).json({ success: true, ...result });
+});
+
+// People picker list for one business unit — names and roles only.
+export const directory = asyncHandler(async (req, res) => {
+    const users = await listDirectory({ businessUnitId: req.query.businessUnitId }, req.user ?? null);
+
+    res.status(200).json({ success: true, data: users });
 });
 
 export const getOne = asyncHandler(async (req, res) => {

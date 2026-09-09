@@ -15,22 +15,30 @@ import requireSuperAdmin from "../middleware/requireSuperAdmin.js";
 
 const router = Router();
 
+// Every business-unit route needs a signed-in user. Applying the validator
+// once here means a new route can never be mounted unauthenticated by
+// accident (this file previously exposed GET /:id and the config routes
+// to anyone).
+router.use(tokenValidator);
+
 // Scoped list: the requesting user's assigned units (deny-by-default);
 // ADM sees every unit.
-router.get("/", tokenValidator, getAll);
+router.get("/", getAll);
 // Unit lifecycle is strictly superadmin — requireSuperAdmin cannot be
 // granted to other roles through the permission editor.
-router.post("/", tokenValidator, requireSuperAdmin, create);
+router.post("/", requireSuperAdmin, create);
 router.get("/:id", getOne);
-router.patch("/:id", tokenValidator, requireSuperAdmin, update); // { name?, legalName?, timezone?, status? }
-router.delete("/:id", tokenValidator, requireSuperAdmin, remove); // only units with no opportunities
+router.patch("/:id", requireSuperAdmin, update); // { name?, legalName?, timezone?, status? }
+router.delete("/:id", requireSuperAdmin, remove); // only units with no opportunities
 // Master config: billingSplit, commissionTiers, approvalTypes,
-// siteWorkSubstages, enabledStages, slaDays, marginFloor, metadata
+// siteWorkSubstages, enabledStages, slaDays, marginFloor, metadata.
+// Reads are open to any signed-in user (the workspace needs them); edits
+// need admin.update, matching the Unit settings screen (ADM bypasses in code).
 router.get("/:id/config", getConfig);
-router.patch("/:id/config", updateConfig);
+router.patch("/:id/config", requirePermission("admin.update"), updateConfig);
 // Page toggles: which registry pages this unit runs. Reads are open to any
 // signed-in user; edits need admin.update (ADM bypasses in code).
-router.get("/:id/pages", tokenValidator, getForUnit);
-router.put("/:id/pages", tokenValidator, requirePermission("admin.update"), setForUnit); // { pages: [{ code, enabled }] }
+router.get("/:id/pages", getForUnit);
+router.put("/:id/pages", requirePermission("admin.update"), setForUnit); // { pages: [{ code, enabled }] }
 
 export default router;

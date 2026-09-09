@@ -200,6 +200,26 @@ export const listUsers = async ({ filters = {}, pagination = {} } = {}, actor = 
     return { data: rows, total: count, page, pageSize };
 };
 
+// Minimal people directory for pickers (assign estimator, owner filters,
+// names on cards): id, name, title, roles and status only — no email, phone
+// or login history. Any signed-in user may call it, but only for a business
+// unit they are assigned to (ADM: any unit). Active users only.
+export const listDirectory = async ({ businessUnitId } = {}, actor = null) => {
+    const unitId = parseId(businessUnitId, "businessUnitId");
+    const scope = await actorUnitScope(actor);
+    if (scope && !scope.includes(unitId)) throw httpError(403, "This business unit is outside your assignments");
+
+    const links = await UserBusinessUnit.findAll({ where: { businessUnitId: unitId }, attributes: ["userId"] });
+    const ids = [...new Set(links.map((link) => link.userId))];
+    if (!ids.length) return [];
+    return User.findAll({
+        where: { id: { [Op.in]: ids }, status: "active" },
+        attributes: ["id", "name", "title", "roles", "status"],
+        order: [["name", "ASC"]],
+        limit: 500,
+    });
+};
+
 // actor: the administrator or director performing the action (recorded on
 // unit assignments). Scoped actors create users only inside their own units
 // and can never mint administrator accounts.
