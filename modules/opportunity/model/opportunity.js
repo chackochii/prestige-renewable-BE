@@ -39,8 +39,11 @@ export default (sequelize, DataTypes) => {
             leadType: {
                 type: DataTypes.STRING(20),
                 allowNull: true,
-                validate: { isIn: [["residential", "commercial"]] },
+                validate: { isIn: [["residential", "commercial", "industrial", "other"]] },
             },
+            // Where the lead came from in the salesperson's words (who referred,
+            // which campaign, …) — the structured referrer link is referrerId.
+            leadSourceDetails: { type: DataTypes.STRING(500) },
             involvementTier: {
                 type: DataTypes.STRING(30),
                 allowNull: true,
@@ -130,6 +133,22 @@ export default (sequelize, DataTypes) => {
             closureWarrantyContact: { type: DataTypes.STRING },
             closureFutureEngagement: { type: DataTypes.STRING },
             closedAt: { type: DataTypes.DATE },
+
+            // ---- Lead capture checklist (stage 1) ----------------------------
+            // What Estimation needs before a lead can be marked a potential
+            // client — see opportunityService.qualificationChecklistItems.
+            siteMapUrl: { type: DataTypes.STRING(1000) },
+            needsClientContact: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            contactAttempts: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // [{ method, contactedAt, reached, reason }]
+            hasOwnerDiscount: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            ownerDiscountName: { type: DataTypes.STRING },
+            ownerDiscountAmount: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+            unassignedReason: { type: DataTypes.TEXT }, // why no salesperson is assigned yet
+            needsClientVisit: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            clientVisitReason: { type: DataTypes.TEXT },
+            operationalCoordinatorId: { type: DataTypes.INTEGER, allowNull: true }, // runs the client visit
+            customFields: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // [{ label, value }]
+            notPotentialReason: { type: DataTypes.TEXT }, // when qualification = disqualified
         },
         {
             tableName: "opportunities",
@@ -152,6 +171,8 @@ export default (sequelize, DataTypes) => {
         Opportunity.belongsTo(db.User, { foreignKey: "estimatorId", as: "estimator" });
         Opportunity.belongsTo(db.User, { foreignKey: "salespersonId", as: "salesperson" });
         Opportunity.belongsTo(db.User, { foreignKey: "deliveryOwnerId", as: "deliveryOwner" });
+        Opportunity.belongsTo(db.User, { foreignKey: "operationalCoordinatorId", as: "operationalCoordinator" });
+        Opportunity.hasMany(db.OpportunityHistory, { foreignKey: "opportunityId", as: "history" });
 
         Opportunity.hasMany(db.Estimate, { foreignKey: "opportunityId", as: "estimates" });
         Opportunity.hasMany(db.Proposal, { foreignKey: "opportunityId", as: "proposals" });

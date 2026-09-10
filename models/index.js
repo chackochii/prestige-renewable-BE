@@ -14,6 +14,7 @@ import defineIntegrationConnection from "../modules/lead/model/integrationConnec
 import defineInboundLead from "../modules/lead/model/inboundLead.js";
 import defineReferrer from "../modules/referrer/model/referrer.js";
 import defineOpportunity from "../modules/opportunity/model/opportunity.js";
+import defineOpportunityHistory from "../modules/opportunity/model/opportunityHistory.js";
 import defineEstimate from "../modules/opportunity/model/estimate.js";
 import defineEstimateOption from "../modules/opportunity/model/estimateOption.js";
 import defineProposal from "../modules/opportunity/model/proposal.js";
@@ -42,6 +43,7 @@ db.BusinessUnitPage = defineBusinessUnitPage(sequelize, DataTypes);
 db.Referrer = defineReferrer(sequelize, DataTypes);
 db.Campaign = defineCampaign(sequelize, DataTypes);
 db.Opportunity = defineOpportunity(sequelize, DataTypes);
+db.OpportunityHistory = defineOpportunityHistory(sequelize, DataTypes);
 
 // Lead ingestion (ad platforms & ServiceM8)
 db.IntegrationConnection = defineIntegrationConnection(sequelize, DataTypes);
@@ -81,6 +83,7 @@ export const {
     Referrer,
     Campaign,
     Opportunity,
+    OpportunityHistory,
     IntegrationConnection,
     InboundLead,
     Estimate,

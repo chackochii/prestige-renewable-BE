@@ -15,16 +15,20 @@ const parser = multer({
 const MULTER_MESSAGES = {
     LIMIT_FILE_SIZE: `Each file must be 10 MB or smaller`,
     LIMIT_FILE_COUNT: `Upload at most ${MAX_FILES} files at a time`,
-    LIMIT_UNEXPECTED_FILE: `Send files in the "files" field`,
+    LIMIT_UNEXPECTED_FILE: `Send files in the "files" field (or "file" for a single upload)`,
+};
+
+const translate = (next) => (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError)
+        return next(Object.assign(new Error(MULTER_MESSAGES[err.code] || err.message), { status: 400 }));
+    return next(err);
 };
 
 /** Accepts up to 10 files in the multipart field "files". */
-export const uploadFiles = (req, res, next) =>
-    parser.array("files", MAX_FILES)(req, res, (err) => {
-        if (!err) return next();
-        if (err instanceof multer.MulterError)
-            return next(Object.assign(new Error(MULTER_MESSAGES[err.code] || err.message), { status: 400 }));
-        return next(err);
-    });
+export const uploadFiles = (req, res, next) => parser.array("files", MAX_FILES)(req, res, translate(next));
+
+/** Accepts one file in the multipart field "file" (req.file). */
+export const uploadSingleFile = (req, res, next) => parser.single("file")(req, res, translate(next));
 
 export default uploadFiles;

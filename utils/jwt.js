@@ -15,4 +15,12 @@ export const signToken = (user) =>
         expiresIn: process.env.JWT_EXPIRES_IN || "1d",
     });
 
+// Short-lived token that can only fetch one document (scope + doc claims are
+// checked by tokenValidator / the download handler). Lets <img> and links
+// load protected files without putting the session token in a URL.
+export const signDownloadToken = (user, documentId) =>
+    jwt.sign({ sub: String(user.id), scope: "download", doc: Number(documentId) }, secret(), {
+        expiresIn: process.env.DOWNLOAD_TOKEN_EXPIRES_IN || "2h",
+    });
+
 export const verifyToken = (token) => jwt.verify(token, secret());

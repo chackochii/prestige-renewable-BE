@@ -151,20 +151,32 @@ All application code (`server.js`, `app.js`, models, routes) uses `import`/`expo
 
 All tables use UUID primary keys, snake_case columns, and foreign keys with cascade rules. Sequelize models live in `modules/<name>/model/` and are registered with their associations in `models/index.js`.
 
-## Lead pack attachments (meetings & documents)
+## Lead capture (stage 1) API
 
-Leads are opportunities at stage 1. Besides the lead fields (`PATCH /api/opportunities/:id`), the lead pack carries a client-meeting log (JSONB on the row) and uploaded documents (`documents` table, files on disk under `UPLOAD_DIR`, default `./uploads`). Every mutation returns the refreshed opportunity, which includes `meetings[]` and `documents[]` (each document has a `fileUrl`).
+Leads are opportunities at stage 1. The lead fields — customer, site (incl. `siteMapUrl`), energy, source (`leadSource` + free-text `leadSourceDetails`), the mandatory-checklist fields (`leadType`, `needsClientContact` + `contactAttempts[]`, `hasOwnerDiscount` + name/amount, `needsClientVisit` + `clientVisitReason`, `customFields[]`, `notPotentialReason`) and `qualification` — go through `POST /api/opportunities` and `PATCH /api/opportunities/:id`. Everything else is an action with its own endpoint:
 
-| Method | Route | Permission | Body |
+| Method | Route | Permission | Body → returns |
 |---|---|---|---|
-| `POST` | `/api/opportunities/:id/meetings` | `leads.update` | `{ attendees, outcome?, nextStep?, at? }` |
+| `GET` | `/api/opportunities/:id/history` | `leads.read` | job history, newest first: `{ id, kind: note\|system, note, authorName, createdAt }` |
+| `POST` | `/api/opportunities/:id/history` | `leads.update` | `{ note }` → the entry |
+| `GET` / `POST` | `/api/opportunities/:id/meetings` | read / update | `{ attendees, outcome?, nextStep?, at? }` → the meeting entry |
 | `DELETE` | `/api/opportunities/:id/meetings/:meetingId` | `leads.update` | — |
-| `GET` | `/api/opportunities/:id/documents` | `leads.read` | — |
-| `POST` | `/api/opportunities/:id/documents` | `leads.update` | multipart: `files[]` (≤10 × 10 MB) + `type` (`site_photo`, `drawing`, `lead`, `energy_bill`, …), `stage?`, `label?` |
-| `DELETE` | `/api/opportunities/:id/documents/:docId` | `leads.update` | — |
-| `GET` | `/api/opportunities/:id/documents/:docId/file` | `leads.read` | serves the file; accepts `?token=<jwt>` (for `<img>`/links) and `?download=1` |
+| `GET` | `/api/opportunities/:id/attachments` | `leads.read` | `[{ id, category, filename, size, mime, url, uploaderName, createdAt }]` |
+| `POST` | `/api/opportunities/:id/attachments` | `leads.update` | multipart `file` + `category` (`photo` \| `sketch` \| `bill` \| `document`) → the attachment |
+| `GET` | `/api/opportunities/:id/documents` | `leads.read` | generic document rows (`type`, `stage`, `label`, `fileUrl`) |
+| `POST` | `/api/opportunities/:id/documents` | `leads.update` | multipart `files[]` (≤10 × 10 MB) + `type`, `stage?`, `label?` → refreshed opportunity |
+| `DELETE` | `/api/opportunities/:id/documents/:docId` | `leads.update` | → refreshed opportunity |
+| `GET` | `/api/opportunities/:id/documents/:docId/file` | `leads.read` | the file; `?download=1` forces a download |
+| `POST` | `/api/opportunities/:id/assign-salesperson` | `leads.update` | `{ salespersonId \| null, reason? }` (reason required when unassigned) → refreshed opportunity |
+| `POST` | `/api/opportunities/:id/assign-estimator` | `leads.update` | `{ estimatorId }` → refreshed opportunity |
+| `POST` | `/api/opportunities/:id/assign-coordinator` | `leads.update` | `{ operationalCoordinatorId }` → refreshed opportunity |
+| `POST` | `/api/opportunities/:id/notify-owner` | `leads.update` | → `{ notified, recipients[] }` — in-app `notifications` rows for the unit's active `BO` users |
 
-**Qualification gate:** a lead can only be set to `qualification: "qualified"` once it has at least one meeting and one `site_photo` or `drawing` document; a new lead cannot be created already qualified (it defaults to `nurture`). Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
+Notes:
+
+- **Files** live on disk under `UPLOAD_DIR` (default `./uploads`, git-ignored). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
+- **Assignments** must be active users of the record's business unit (ADM anywhere) and each writes a `system` history entry.
+- **Qualification:** new leads default to `nurture`. Setting `qualification: "qualified"` (the "Potential client" decision) requires the checklist to be complete — lead type, site address, customer email + phone, electricity bills (flag or an uploaded bill), annual usage, lead source details, and a logged contact attempt when `needsClientContact` is set. `disqualified` requires `notPotentialReason`. Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
 
 ## Project structure
 

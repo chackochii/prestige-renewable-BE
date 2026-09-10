@@ -5,7 +5,7 @@
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
-import { presentDocument, qualificationGateItems } from "./leadAttachmentService.js";
+import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document } = db;
 
@@ -17,29 +17,78 @@ const MANUAL_LEAD_SOURCES = ["internal", "inbound", "referrer"];
 
 // Fields the client may set directly; everything else (number, stage,
 // lifecycle, SLA, margin floor, owners' audit trail) is server-managed.
+// Assignments (salesperson, estimator, operational coordinator) have their own
+// endpoints in leadWorkflowService; the legacy estimatorId/salespersonId
+// fields stay accepted here for older callers.
 const LEAD_FIELDS = [
     "customerLegalName", "customerTradingName", "customerAbn", "customerEmail",
     "customerPhone", "customerBillingAddress",
     "siteLine1", "siteSuburb", "siteState", "sitePostcode", "siteJurisdiction",
-    "siteContact", "siteAccessNotes",
+    "siteContact", "siteAccessNotes", "siteMapUrl",
     "contactName", "contactRole", "contactEmail", "contactPhone",
     "qualification", "qualificationAuthority", "qualificationTiming",
     "estimatedValue", "nextAction", "nextActionDueAt",
     "energyAnnualKwh", "energyHasBills", "energyNotes",
-    "leadSource", "referrerId", "involvementTier", "leadType",
+    "leadSource", "leadSourceDetails", "referrerId", "involvementTier", "leadType",
+    "needsClientContact", "contactAttempts",
+    "hasOwnerDiscount", "ownerDiscountName", "ownerDiscountAmount",
+    "needsClientVisit", "clientVisitReason", "customFields", "notPotentialReason",
     "estimatorId", "salespersonId", "notes",
 ];
+const BOOLEAN_FIELDS = ["energyHasBills", "needsClientContact", "hasOwnerDiscount", "needsClientVisit"];
+const NUMERIC_FIELDS = ["energyAnnualKwh", "estimatedValue", "ownerDiscountAmount"];
+const MAX_LENGTH = { siteMapUrl: 1000, leadSourceDetails: 500, customerAbn: 20, siteState: 10, sitePostcode: 10, siteJurisdiction: 10 };
+
+const toBool = (value) => value === true || value === 1 || value === "true" || value === "1";
+const text = (value, max) => String(value ?? "").trim().slice(0, max);
+
+// [{ method, contactedAt, reached, reason }] — kept as given, trimmed and capped.
+const sanitizeContactAttempts = (list) => {
+    if (!Array.isArray(list)) throw httpError(400, "contactAttempts must be an array");
+    if (list.length > 50) throw httpError(400, "contactAttempts: at most 50 entries");
+    return list.map((a) => {
+        const contactedAt = a?.contactedAt ? String(a.contactedAt).slice(0, 10) : null;
+        if (contactedAt && Number.isNaN(new Date(contactedAt).getTime()))
+            throw httpError(400, "contactAttempts: contactedAt must be a date");
+        return {
+            method: text(a?.method, 200),
+            contactedAt,
+            reached: a?.reached !== false && a?.reached !== "false",
+            reason: text(a?.reason, 2000),
+        };
+    });
+};
+
+// [{ label, value }]
+const sanitizeCustomFields = (list) => {
+    if (!Array.isArray(list)) throw httpError(400, "customFields must be an array");
+    if (list.length > 50) throw httpError(400, "customFields: at most 50 entries");
+    return list
+        .map((f) => ({ label: text(f?.label, 100), value: text(f?.value, 1000) }))
+        .filter((f) => f.label || f.value);
+};
 
 const pickLeadFields = (payload) => {
     const picked = {};
     for (const field of LEAD_FIELDS) if (payload[field] !== undefined) picked[field] = payload[field];
-    if (picked.energyHasBills !== undefined) picked.energyHasBills = Boolean(picked.energyHasBills);
+    for (const field of BOOLEAN_FIELDS) if (picked[field] !== undefined) picked[field] = toBool(picked[field]);
     if (picked.leadType === "") picked.leadType = null; // model validates the value otherwise
-    for (const numeric of ["energyAnnualKwh", "estimatedValue"]) {
+    for (const numeric of NUMERIC_FIELDS) {
         if (picked[numeric] === "" || picked[numeric] === null) picked[numeric] = null;
         else if (picked[numeric] !== undefined && !Number.isFinite(Number(picked[numeric])))
             throw httpError(400, `${numeric} must be a number`);
     }
+    for (const [field, max] of Object.entries(MAX_LENGTH))
+        if (typeof picked[field] === "string" && picked[field].length > max)
+            throw httpError(400, `${field} is too long (${max} characters max)`);
+    if (picked.contactAttempts !== undefined) picked.contactAttempts = sanitizeContactAttempts(picked.contactAttempts);
+    if (picked.customFields !== undefined) picked.customFields = sanitizeCustomFields(picked.customFields);
+    if (picked.hasOwnerDiscount === false) {
+        picked.ownerDiscountName = null;
+        picked.ownerDiscountAmount = null;
+    }
+    if (picked.needsClientVisit === false) picked.clientVisitReason = null;
+    if (picked.needsClientContact === false) picked.contactAttempts = [];
     return picked;
 };
 
@@ -127,6 +176,7 @@ export const getOpportunity = async (id) => {
             { model: User, as: "leadOwner", attributes: ["id", "name"] },
             { model: User, as: "estimator", attributes: ["id", "name"] },
             { model: User, as: "salesperson", attributes: ["id", "name"] },
+            { model: User, as: "operationalCoordinator", attributes: ["id", "name"] },
             {
                 model: Document,
                 as: "documents",
@@ -141,17 +191,46 @@ export const getOpportunity = async (id) => {
     return plain;
 };
 
-// Marking a lead Qualified needs evidence from the ground: a logged client
-// meeting and a site photo or sketch (the prototype's rule). New leads
-// therefore start as Nurture unless the caller says otherwise — and cannot
-// start Qualified.
-const assertCanQualify = async (opportunity) => {
-    const missing = await qualificationGateItems(opportunity);
+// ---- Qualification gate -----------------------------------------------------
+// A lead is marked "qualified" through the Potential-client decision, which
+// the form only offers once the mandatory checklist is complete. The same
+// checklist is enforced here so the API cannot be bypassed.
+
+const isBlank = (value) => value === undefined || value === null || String(value).trim() === "";
+
+/**
+ * What the checklist still needs. `billDocument` = an energy bill is on file;
+ * `skipBills` for brand-new records whose bills are uploaded right after.
+ */
+export const qualificationChecklistItems = (o, { billDocument = false, skipBills = false } = {}) => {
+    const missing = [];
+    if (o.needsClientContact && !(Array.isArray(o.contactAttempts) ? o.contactAttempts : []).length)
+        missing.push("a logged contact attempt");
+    if (isBlank(o.leadType)) missing.push("lead type");
+    if (isBlank(o.siteLine1) || isBlank(o.siteSuburb) || isBlank(o.sitePostcode)) missing.push("site address");
+    if (isBlank(o.customerEmail)) missing.push("customer email");
+    if (isBlank(o.customerPhone)) missing.push("customer phone");
+    if (!skipBills && !o.energyHasBills && !billDocument) missing.push("electricity bills");
+    if (isBlank(o.energyAnnualKwh)) missing.push("annual usage");
+    if (isBlank(o.leadSource) || (MANUAL_LEAD_SOURCES.includes(o.leadSource) && isBlank(o.leadSourceDetails)))
+        missing.push("lead source details");
+    return missing;
+};
+
+const assertCanQualify = async (merged, { isNew = false } = {}) => {
+    const billDocument = isNew ? false : await hasDocumentOfType(merged.id, "energy_bill");
+    const missing = qualificationChecklistItems(merged, { billDocument, skipBills: isNew });
     if (missing.length)
         throw httpError(
             400,
-            `Before marking the lead Qualified, add ${missing.join(" and ")} on the record`
+            `Complete the lead checklist before marking this a potential client — missing: ${missing.join(", ")}`
         );
+};
+
+const assertQualificationConsistent = (fields) => {
+    if (fields.qualification === "disqualified" && isBlank(fields.notPotentialReason))
+        throw httpError(400, "Give the reason this is not a potential client (notPotentialReason)");
+    if (fields.qualification !== undefined && fields.qualification !== "disqualified") fields.notPotentialReason = null;
 };
 
 export const createLead = async (payload = {}, actor) => {
@@ -161,11 +240,8 @@ export const createLead = async (payload = {}, actor) => {
     const fields = pickLeadFields(payload);
     if (!fields.customerLegalName?.trim()) throw httpError(400, "customerLegalName is required");
     fields.qualification = fields.qualification ?? "nurture";
-    if (fields.qualification === "qualified")
-        throw httpError(
-            400,
-            "A new lead starts as Nurture — log a client meeting and attach a site photo or sketch on the record before marking it Qualified"
-        );
+    if (fields.qualification === "qualified") await assertCanQualify(fields, { isNew: true });
+    assertQualificationConsistent(fields);
     fields.leadSource = fields.leadSource ?? "inbound";
     await normalizeSource(fields);
     fields.estimatorId = await assertUserExists(fields.estimatorId, "estimator");
@@ -197,7 +273,8 @@ export const updateLead = async (id, payload = {}, actor) => {
     if (fields.customerLegalName !== undefined && !fields.customerLegalName?.trim())
         throw httpError(400, "customerLegalName cannot be blank");
     if (fields.qualification === "qualified" && opportunity.qualification !== "qualified")
-        await assertCanQualify(opportunity);
+        await assertCanQualify({ ...opportunity.get({ plain: true }), ...fields });
+    assertQualificationConsistent(fields);
     fields.leadSource = fields.leadSource ?? opportunity.leadSource;
     await normalizeSource(fields);
     if (fields.estimatorId !== undefined)
@@ -212,8 +289,8 @@ export const updateLead = async (id, payload = {}, actor) => {
 
 // Move to the next stage the unit runs (disabled stages are skipped, never
 // renumbered) and restart the SLA clock from the unit's slaDays config.
-// Stage gates live here — leaving lead capture needs a qualified lead with
-// an estimator, matching the prototype's rule.
+// Stage gates live here — leaving lead capture needs a potential (qualified)
+// lead with an estimator.
 export const advanceStage = async (id, actor) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
     if (!opportunity) throw httpError(404, "Opportunity not found");
@@ -222,7 +299,7 @@ export const advanceStage = async (id, actor) => {
     if (opportunity.stage >= 9) throw httpError(400, "Already at the final stage");
     if (opportunity.stage === 1) {
         if (opportunity.qualification !== "qualified")
-            throw httpError(400, "Lead must be Qualified to progress (or mark it Lost / Nurture)");
+            throw httpError(400, "Lead must be marked a potential client to progress");
         if (!opportunity.estimatorId)
             throw httpError(400, "Assign an estimator before leaving lead capture");
     }
