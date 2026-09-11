@@ -6,6 +6,8 @@ import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
+import { isEstimationReady } from "./estimationService.js";
+import { quoteHasItems } from "./quoteService.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document } = db;
 
@@ -177,6 +179,7 @@ export const getOpportunity = async (id) => {
             { model: User, as: "estimator", attributes: ["id", "name"] },
             { model: User, as: "salesperson", attributes: ["id", "name"] },
             { model: User, as: "operationalCoordinator", attributes: ["id", "name"] },
+            { model: User, as: "siteVisitAssignee", attributes: ["id", "name"] },
             {
                 model: Document,
                 as: "documents",
@@ -302,6 +305,14 @@ export const advanceStage = async (id, actor) => {
             throw httpError(400, "Lead must be marked a potential client to progress");
         if (!opportunity.estimatorId)
             throw httpError(400, "Assign an estimator before leaving lead capture");
+    }
+    // Leaving estimation needs sales' requirements confirmed, no client input
+    // outstanding, and a quote with at least one priced item.
+    if (opportunity.stage === 2) {
+        if (!isEstimationReady(opportunity))
+            throw httpError(400, "Complete estimation (requirements confirmed, client input resolved) before leaving this stage");
+        if (!(await quoteHasItems(opportunity.id)))
+            throw httpError(400, "Add at least one item to the quote before leaving estimation");
     }
 
     const unit = await BusinessUnit.findByPk(opportunity.businessUnitId);

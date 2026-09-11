@@ -176,6 +176,26 @@ Notes:
 
 - **Files** live on disk under `UPLOAD_DIR` (default `./uploads`, git-ignored). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
 - **Assignments** must be active users of the record's business unit (ADM anywhere) and each writes a `system` history entry.
+## Estimation (stage 2) & quote builder API
+
+The estimator's workflow state lives on the opportunity (`estimation*` fields, returned by every opportunity endpoint) and each step is its own endpoint. Writes need `estimation.update`; reads accept `leads.read` or `estimation.read`. The advance gate for stage 2: requirements confirmed, client input resolved (`estimationClientInfoNeeded = false`) and a quote with at least one item.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `POST` | `/api/opportunities/:id/estimation/requirements` | `{ received: bool, checklistKeys?: string[], reason? }` — `received=false` needs `reason` (puts estimation on hold) → opportunity |
+| `POST` | `/api/opportunities/:id/estimation/client-info` | `{ needed: bool }` → opportunity |
+| `POST` | `/api/opportunities/:id/estimation/checklist` | `{ checklistValues?: {key: answer}, preSiteInspectionRequired?, siteVisitAssigneeId?, siteVisitCompleted? }` → opportunity |
+| `POST` | `/api/opportunities/:id/notify-sales-manager` | notifies active `SMM` users in the unit + the salesperson (hold reason in the body) → `{ notified, recipients[] }` |
+| `POST` | `/api/opportunities/:id/notify-operations-coordinator` | notifies active `OPC` users + the assigned coordinator → `{ notified, recipients[] }` |
+| `GET` | `/api/opportunities/:id/quote` | quote or `null` |
+| `POST` | `/api/opportunities/:id/quote` | creates it (idempotent); server sets `quoteNumber` (`PRS-Q-26-0008`), customer, estimator, date → quote |
+| `PATCH` | `/api/opportunities/:id/quote` | `{ project?, projectType?, projectTypeOther?, quoteDate?, taxTreatment? (exclusive\|inclusive\|no_gst), gstRatePct? }` → quote |
+| `POST` / `PATCH` / `DELETE` | `/api/opportunities/:id/quote/items[/:itemId]` | `{ itemKey, itemName, brand, unit, quantity, unitPrice, discountPct }` → item |
+| `POST` / `PATCH` / `DELETE` | `/api/opportunities/:id/quote/costs[/:costId]` | `{ costType, calcType (fixed\|percentage), value, description }` → cost |
+| `GET` | `/api/catalog` | any signed-in user → `[{ key, name, unit, brands: [{ name, unitPrice }] }]` (seeded by `npm run db:seed:catalog`, part of `npm run update`) |
+
+Quote totals and GST are derived by the client from items and costs; the API stores no totals. Every assignment, hold, confirmation and notification writes a `system` entry to the job history. `POST /:id/assign-coordinator` accepts `leads.update` **or** `estimation.update` because both screens use it.
+
 - **Qualification:** new leads default to `nurture`. Setting `qualification: "qualified"` (the "Potential client" decision) requires the checklist to be complete — lead type, site address, customer email + phone, electricity bills (flag or an uploaded bill), annual usage, lead source details, and a logged contact attempt when `needsClientContact` is set. `disqualified` requires `notPotentialReason`. Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
 
 ## Project structure

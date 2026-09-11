@@ -15,6 +15,10 @@ import defineInboundLead from "../modules/lead/model/inboundLead.js";
 import defineReferrer from "../modules/referrer/model/referrer.js";
 import defineOpportunity from "../modules/opportunity/model/opportunity.js";
 import defineOpportunityHistory from "../modules/opportunity/model/opportunityHistory.js";
+import defineQuote from "../modules/opportunity/model/quote.js";
+import defineQuoteItem from "../modules/opportunity/model/quoteItem.js";
+import defineQuoteCost from "../modules/opportunity/model/quoteCost.js";
+import defineCatalogItem from "../modules/catalog/model/catalogItem.js";
 import defineEstimate from "../modules/opportunity/model/estimate.js";
 import defineEstimateOption from "../modules/opportunity/model/estimateOption.js";
 import defineProposal from "../modules/opportunity/model/proposal.js";
@@ -44,6 +48,10 @@ db.Referrer = defineReferrer(sequelize, DataTypes);
 db.Campaign = defineCampaign(sequelize, DataTypes);
 db.Opportunity = defineOpportunity(sequelize, DataTypes);
 db.OpportunityHistory = defineOpportunityHistory(sequelize, DataTypes);
+db.Quote = defineQuote(sequelize, DataTypes);
+db.QuoteItem = defineQuoteItem(sequelize, DataTypes);
+db.QuoteCost = defineQuoteCost(sequelize, DataTypes);
+db.CatalogItem = defineCatalogItem(sequelize, DataTypes);
 
 // Lead ingestion (ad platforms & ServiceM8)
 db.IntegrationConnection = defineIntegrationConnection(sequelize, DataTypes);
@@ -84,6 +92,10 @@ export const {
     Campaign,
     Opportunity,
     OpportunityHistory,
+    Quote,
+    QuoteItem,
+    QuoteCost,
+    CatalogItem,
     IntegrationConnection,
     InboundLead,
     Estimate,

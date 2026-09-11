@@ -1,5 +1,6 @@
 import { Router } from "express";
 import businessUnitRoutes from "./businessUnitRoutes.js";
+import catalogRoutes from "./catalogRoutes.js";
 import opportunityRoutes from "./opportunityRoutes.js";
 import pageRoutes from "./pageRoutes.js";
 import referrerRoutes from "./referrerRoutes.js";
@@ -13,6 +14,7 @@ router.get("/", (req, res) => {
 });
 
 router.use("/business-units", businessUnitRoutes);
+router.use("/catalog", catalogRoutes);
 router.use("/opportunities", opportunityRoutes);
 router.use("/pages", pageRoutes);
 router.use("/referrers", referrerRoutes);

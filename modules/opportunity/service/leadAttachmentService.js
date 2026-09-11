@@ -48,7 +48,13 @@ export const DOCUMENT_TYPES = [
 ];
 
 // Attachment categories the lead screens use → document type.
-export const ATTACHMENT_CATEGORIES = { photo: "site_photo", sketch: "drawing", bill: "energy_bill", document: "lead" };
+export const ATTACHMENT_CATEGORIES = {
+    photo: "site_photo",
+    sketch: "drawing",
+    bill: "energy_bill",
+    document: "lead",
+    client_document: "evidence", // what the client sends over during estimation
+};
 const CATEGORY_BY_TYPE = Object.fromEntries(Object.entries(ATTACHMENT_CATEGORIES).map(([c, t]) => [t, c]));
 
 const formatSize = (bytes) => {

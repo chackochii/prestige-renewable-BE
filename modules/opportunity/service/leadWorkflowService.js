@@ -11,8 +11,10 @@ const { Opportunity, OpportunityHistory, User, UserBusinessUnit, BusinessUnit, N
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
-/** Role code of the people who are told about every new lead in their unit. */
+/** Role codes the workflow notifies (see seeders/roles-permissions.cjs). */
 export const BUSINESS_OWNER_ROLE = "BO";
+export const SALES_MANAGER_ROLE = "SMM";
+export const OPERATIONS_COORDINATOR_ROLE = "OPC";
 
 const loadOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
@@ -67,13 +69,13 @@ export const addHistoryNote = async (id, payload = {}, actor) => {
     return createEntry(opportunity, note, "note", actor);
 };
 
-const recordSystemEvent = (opportunity, note, actor) => createEntry(opportunity, note, "system", actor);
+export const recordSystemEvent = (opportunity, note, actor) => createEntry(opportunity, note, "system", actor);
 
 // ---- Assignments ------------------------------------------------------------
 
 // Work can only be assigned to an active person who belongs to the record's
 // business unit (ADM accounts work in every unit).
-const assertAssignable = async (userId, opportunity, label) => {
+export const assertAssignable = async (userId, opportunity, label) => {
     const user = await User.findByPk(parseId(userId, label));
     if (!user) throw httpError(400, `Unknown user for ${label}`);
     if (user.status !== "active") throw httpError(400, `${user.name} is not an active account`);
@@ -136,42 +138,107 @@ export const assignCoordinator = async (id, payload = {}, actor) => {
 
 // ---- Notifications ----------------------------------------------------------
 
-/**
- * Creates an in-app notification for every active Business Owner in the
- * record's unit. Returns who was notified; zero recipients is not an error
- * (the unit may simply have no owner account yet).
- */
-export const notifyBusinessOwner = async (id, actor) => {
-    const opportunity = await loadOpportunity(id);
-    const unit = await BusinessUnit.findByPk(opportunity.businessUnitId, { attributes: ["id", "name"] });
+// Active users in the record's unit holding the role, plus any explicitly
+// named users (e.g. the assigned salesperson) — de-duplicated.
+const recipientsFor = async (opportunity, roleCode, extraUserIds = []) => {
     const links = await UserBusinessUnit.findAll({
         where: { businessUnitId: opportunity.businessUnitId },
         attributes: ["userId"],
     });
-    const owners = links.length
+    const holders = links.length
         ? await User.findAll({
               where: {
                   id: { [Op.in]: links.map((link) => link.userId) },
                   status: "active",
-                  roles: { [Op.contains]: [BUSINESS_OWNER_ROLE] },
+                  roles: { [Op.contains]: [roleCode] },
               },
               attributes: ["id", "name"],
           })
         : [];
+    const extraIds = extraUserIds.filter((userId) => userId && !holders.some((u) => u.id === userId));
+    const extras = extraIds.length
+        ? await User.findAll({ where: { id: { [Op.in]: extraIds }, status: "active" }, attributes: ["id", "name"] })
+        : [];
+    return [...holders, ...extras];
+};
 
-    const customer = opportunity.customerLegalName || opportunity.customerTradingName || "A new customer";
-    const title = `New lead ${opportunity.number}`;
-    const body = `${customer} was captured in ${unit?.name ?? "the business unit"}${actor?.name ? ` by ${actor.name}` : ""}.`;
-    if (owners.length)
+/**
+ * Creates an in-app notification for every recipient and records who was
+ * told in the job history. Zero recipients is not an error (the unit may
+ * simply have nobody in that role yet).
+ */
+const notifyRole = async (opportunity, { roleCode, roleLabel, extraUserIds, title, body }, actor) => {
+    const recipients = await recipientsFor(opportunity, roleCode, extraUserIds);
+    if (recipients.length)
         await Notification.bulkCreate(
-            owners.map((owner) => ({ userId: owner.id, opportunityId: opportunity.id, title, body }))
+            recipients.map((user) => ({ userId: user.id, opportunityId: opportunity.id, title, body }))
         );
     await recordSystemEvent(
         opportunity,
-        owners.length
-            ? `Business owner notified: ${owners.map((o) => o.name).join(", ")}`
-            : "No business owner account in this unit to notify",
+        recipients.length
+            ? `${roleLabel} notified: ${recipients.map((u) => u.name).join(", ")}`
+            : `No ${roleLabel.toLowerCase()} account in this unit to notify`,
         actor
     );
-    return { notified: owners.length, recipients: owners.map((o) => ({ id: o.id, name: o.name })) };
+    return { notified: recipients.length, recipients: recipients.map((u) => ({ id: u.id, name: u.name })) };
+};
+
+const unitNameOf = async (opportunity) =>
+    (await BusinessUnit.findByPk(opportunity.businessUnitId, { attributes: ["id", "name"] }))?.name ?? "the business unit";
+
+const customerOf = (opportunity) => opportunity.customerLegalName || opportunity.customerTradingName || "A new customer";
+
+/** Tells every active Business Owner in the unit about a newly captured lead. */
+export const notifyBusinessOwner = async (id, actor) => {
+    const opportunity = await loadOpportunity(id);
+    const unitName = await unitNameOf(opportunity);
+    return notifyRole(
+        opportunity,
+        {
+            roleCode: BUSINESS_OWNER_ROLE,
+            roleLabel: "Business owner",
+            title: `New lead ${opportunity.number}`,
+            body: `${customerOf(opportunity)} was captured in ${unitName}${actor?.name ? ` by ${actor.name}` : ""}.`,
+        },
+        actor
+    );
+};
+
+/**
+ * Estimation has sent the lead back: tells the Sales & Marketing Manager(s)
+ * and the assigned salesperson what is still missing.
+ */
+export const notifySalesManager = async (id, actor) => {
+    const opportunity = await loadOpportunity(id);
+    const reason = opportunity.estimationOnHoldReason ? ` Missing: ${opportunity.estimationOnHoldReason}` : "";
+    return notifyRole(
+        opportunity,
+        {
+            roleCode: SALES_MANAGER_ROLE,
+            roleLabel: "Sales manager",
+            extraUserIds: [opportunity.salespersonId],
+            title: `Estimation on hold: ${opportunity.number}`,
+            body: `${customerOf(opportunity)} needs more information from sales before it can be estimated.${reason}`,
+        },
+        actor
+    );
+};
+
+/**
+ * A pre-site inspection is needed: tells the Operations Coordinator(s) and
+ * the coordinator assigned to the record to line up a site team member.
+ */
+export const notifyOperationsCoordinator = async (id, actor) => {
+    const opportunity = await loadOpportunity(id);
+    return notifyRole(
+        opportunity,
+        {
+            roleCode: OPERATIONS_COORDINATOR_ROLE,
+            roleLabel: "Operations coordinator",
+            extraUserIds: [opportunity.operationalCoordinatorId],
+            title: `Site visit needed: ${opportunity.number}`,
+            body: `${customerOf(opportunity)} needs a pre-site inspection — assign a site team member.`,
+        },
+        actor
+    );
 };

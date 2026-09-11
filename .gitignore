@@ -1,5 +1,23 @@
+# dependencies
 node_modules/
+package-lock.json
+
+# environment / secrets
 .env
-*.log
+.env.*
+!.env.example
+
+# runtime data
 logs/
+*.log
+npm-debug.log*
 uploads/
+tmp/
+coverage/
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

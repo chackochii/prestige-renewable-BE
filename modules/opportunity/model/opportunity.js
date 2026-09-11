@@ -149,6 +149,17 @@ export default (sequelize, DataTypes) => {
             operationalCoordinatorId: { type: DataTypes.INTEGER, allowNull: true }, // runs the client visit
             customFields: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // [{ label, value }]
             notPotentialReason: { type: DataTypes.TEXT }, // when qualification = disqualified
+
+            // ---- Estimation workflow (stage 2) --------------------------------
+            // null = question not answered yet; see estimationService.
+            estimationRequirementsReceived: { type: DataTypes.BOOLEAN, allowNull: true },
+            estimationRequirementsChecklist: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // ticked checklist keys
+            estimationOnHoldReason: { type: DataTypes.TEXT }, // what sales still owes (when received = false)
+            estimationClientInfoNeeded: { type: DataTypes.BOOLEAN, allowNull: true },
+            estimationChecklistValues: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} }, // { key: answer }
+            estimationPreSiteInspectionRequired: { type: DataTypes.BOOLEAN, allowNull: true },
+            estimationSiteVisitAssigneeId: { type: DataTypes.INTEGER, allowNull: true },
+            estimationSiteVisitCompleted: { type: DataTypes.BOOLEAN, allowNull: true },
         },
         {
             tableName: "opportunities",
@@ -173,6 +184,8 @@ export default (sequelize, DataTypes) => {
         Opportunity.belongsTo(db.User, { foreignKey: "deliveryOwnerId", as: "deliveryOwner" });
         Opportunity.belongsTo(db.User, { foreignKey: "operationalCoordinatorId", as: "operationalCoordinator" });
         Opportunity.hasMany(db.OpportunityHistory, { foreignKey: "opportunityId", as: "history" });
+        Opportunity.belongsTo(db.User, { foreignKey: "estimationSiteVisitAssigneeId", as: "siteVisitAssignee" });
+        Opportunity.hasOne(db.Quote, { foreignKey: "opportunityId", as: "quote" });
 
         Opportunity.hasMany(db.Estimate, { foreignKey: "opportunityId", as: "estimates" });
         Opportunity.hasMany(db.Proposal, { foreignKey: "opportunityId", as: "proposals" });

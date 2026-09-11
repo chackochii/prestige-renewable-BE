@@ -16,4 +16,19 @@ export const requirePermission = (permissionCode) => async (req, res, next) => {
     }
 };
 
+/**
+ * Passes when the user holds ANY of the given permission codes — for a route
+ * shared between two modules (e.g. assigning the operations coordinator from
+ * either the lead pack or the estimation screen).
+ */
+export const requireAnyPermission = (...permissionCodes) => async (req, res, next) => {
+    try {
+        if (!req.user) return errorResponse(res, "Not authenticated", 401);
+        for (const code of permissionCodes) if (await userHasPermission(req.user, code)) return next();
+        return errorResponse(res, `Missing permission: ${permissionCodes.join(" or ")}`, 403);
+    } catch (err) {
+        return next(err);
+    }
+};
+
 export default requirePermission;

@@ -25,7 +25,11 @@ import {
     assignEstimator,
     assignCoordinator,
     notifyBusinessOwner,
+    notifySalesManager,
+    notifyOperationsCoordinator,
 } from "../service/leadWorkflowService.js";
+import { submitRequirements, submitClientInfo, submitChecklist } from "../service/estimationService.js";
+import * as quotes from "../service/quoteService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 
 export const getAll = asyncHandler(async (req, res) => {
@@ -185,4 +189,96 @@ export const notifyOwner = asyncHandler(async (req, res) => {
     const result = await notifyBusinessOwner(req.params.id, req.user);
 
     res.status(200).json({ success: true, data: result });
+});
+
+export const notifySales = asyncHandler(async (req, res) => {
+    const result = await notifySalesManager(req.params.id, req.user);
+
+    res.status(200).json({ success: true, data: result });
+});
+
+export const notifyOpsCoordinator = asyncHandler(async (req, res) => {
+    const result = await notifyOperationsCoordinator(req.params.id, req.user);
+
+    res.status(200).json({ success: true, data: result });
+});
+
+// ---- Estimation workflow (stage 2) ------------------------------------------
+// Each returns the refreshed opportunity (the workflow state lives on it).
+
+export const estimationRequirements = asyncHandler(async (req, res) => {
+    await submitRequirements(req.params.id, req.body, req.user);
+    const opportunity = await getOpportunity(req.params.id);
+
+    res.status(200).json({ success: true, data: opportunity });
+});
+
+export const estimationClientInfo = asyncHandler(async (req, res) => {
+    await submitClientInfo(req.params.id, req.body, req.user);
+    const opportunity = await getOpportunity(req.params.id);
+
+    res.status(200).json({ success: true, data: opportunity });
+});
+
+export const estimationChecklist = asyncHandler(async (req, res) => {
+    await submitChecklist(req.params.id, req.body, req.user);
+    const opportunity = await getOpportunity(req.params.id);
+
+    res.status(200).json({ success: true, data: opportunity });
+});
+
+// ---- Quote ------------------------------------------------------------------
+
+export const getQuote = asyncHandler(async (req, res) => {
+    const quote = await quotes.getQuote(req.params.id);
+
+    res.status(200).json({ success: true, data: quote }); // null until created
+});
+
+export const createQuote = asyncHandler(async (req, res) => {
+    const quote = await quotes.createQuote(req.params.id, req.user);
+
+    res.status(201).json({ success: true, data: quote });
+});
+
+export const updateQuote = asyncHandler(async (req, res) => {
+    const quote = await quotes.updateQuote(req.params.id, req.body);
+
+    res.status(200).json({ success: true, data: quote });
+});
+
+export const addQuoteItem = asyncHandler(async (req, res) => {
+    const item = await quotes.addItem(req.params.id, req.body);
+
+    res.status(201).json({ success: true, data: item });
+});
+
+export const updateQuoteItem = asyncHandler(async (req, res) => {
+    const item = await quotes.updateItem(req.params.id, req.params.itemId, req.body);
+
+    res.status(200).json({ success: true, data: item });
+});
+
+export const deleteQuoteItem = asyncHandler(async (req, res) => {
+    await quotes.removeItem(req.params.id, req.params.itemId);
+
+    res.status(200).json({ success: true, message: "Quote item removed" });
+});
+
+export const addQuoteCost = asyncHandler(async (req, res) => {
+    const cost = await quotes.addCost(req.params.id, req.body);
+
+    res.status(201).json({ success: true, data: cost });
+});
+
+export const updateQuoteCost = asyncHandler(async (req, res) => {
+    const cost = await quotes.updateCost(req.params.id, req.params.costId, req.body);
+
+    res.status(200).json({ success: true, data: cost });
+});
+
+export const deleteQuoteCost = asyncHandler(async (req, res) => {
+    await quotes.removeCost(req.params.id, req.params.costId);
+
+    res.status(200).json({ success: true, message: "Quote cost removed" });
 });
