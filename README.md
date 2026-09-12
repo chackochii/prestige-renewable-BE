@@ -46,6 +46,9 @@ DB_PASSWORD=postgres
 # Seed data (optional — defaults shown are used if omitted)
 SEED_SUPERADMIN_EMAIL=superadmin@prestige.au
 SEED_SUPERADMIN_PASSWORD=ChangeMe@123
+
+# Public enquiry form (optional) — unit code used when the form sends none
+# PUBLIC_LEAD_UNIT_CODE=PRS
 ```
 
 | Variable | Required | Purpose |
@@ -58,6 +61,7 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@123
 | `DB_SSL` | production only | `true` enables SSL for hosted databases |
 | `SEED_SUPERADMIN_EMAIL` | no | Email of the seeded superadmin (default `superadmin@prestige.group`) |
 | `SEED_SUPERADMIN_PASSWORD` | no | Password of the seeded superadmin, stored bcrypt-hashed (default `ChangeMe@123`) |
+| `PUBLIC_LEAD_UNIT_CODE` | no | Business unit the public enquiry form files into when the request has no `businessUnit`; otherwise the first unit by code |
 
 > Keep the `SEED_SUPERADMIN_*` values in `.env` — the seeder's rollback (`db:seed:undo`) matches on the same email it seeded with.
 
@@ -176,6 +180,56 @@ Notes:
 
 - **Files** live on disk under `UPLOAD_DIR` (default `./uploads`, git-ignored). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
 - **Assignments** must be active users of the record's business unit (ADM anywhere) and each writes a `system` history entry.
+## Public enquiry form (no token)
+
+The website enquiry form (`/enquiry` in prestige-fe) talks to one unauthenticated route.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `POST` | `/api/public/leads` | `{ name, email, phone }` required; `siteLine1?, siteSuburb?, siteState?, sitePostcode?, message?, businessUnit? (code)` → `{ number, businessUnit }` |
+
+A successful submission is a normal stage-1 lead (`leadSource: inbound`, `leadSourceDetails: "Website enquiry form"`, message stored in `notes`, no lead owner) and the unit's Business Owners get the same in-app notification as `notify-owner`.
+
+### Which unit a public lead lands in
+
+**The visitor never chooses, and never sees the list of units.** The form has no business-unit field, and there is deliberately no public route that enumerates units. The unit is decided in this order:
+
+1. `?unit=PRS` on the link the sender followed. Signed-in staff copy these per-unit links from the Leads page or Administration → Unit settings.
+2. `PUBLIC_LEAD_UNIT_CODE` in `.env`, for a bare `/enquiry` link.
+3. Failing both, the first `active` or `configured` unit by code.
+
+A `businessUnit` code that is unknown or belongs to an `inactive` unit is rejected with a "this link is not valid" message rather than quietly falling back, so a stale link is noticed instead of misfiling leads. **Set `PUBLIC_LEAD_UNIT_CODE`** if you publish the bare `/enquiry` link, otherwise the fallback unit changes if a new unit is added with an earlier code.
+
+### Field rules
+
+Validation lives in `modules/opportunity/service/publicLeadService.js` and runs before anything touches the database. Errors come back as `400 { message, errors: [{ field, message }] }` listing **every** problem at once. Over-long values are rejected, never truncated, so a 5-digit postcode cannot become a valid-looking 4-digit one.
+
+| Field | Required | Rule |
+|---|---|---|
+| `name` | yes | 2–100 chars; Unicode letters, spaces, apostrophes, full stops, hyphens |
+| `email` | yes | ≤254 chars, standard address shape, lower-cased |
+| `phone` | yes | ≤30 chars of digits and `+ ( ) - space`; 8–15 digits |
+| `siteLine1` | no | ≤200 chars; letters, digits, spaces and `, . ' # / -` |
+| `siteSuburb` | no | ≤100 chars; letters, spaces and `' . -` |
+| `siteState` | no | one of NSW ACT VIC QLD SA WA TAS NT |
+| `sitePostcode` | no | exactly 4 digits |
+| `message` | no | ≤2000 chars, stored in `notes` |
+| `businessUnit` | no | set by the link, not the form; must exist and not be `inactive` |
+
+### Abuse controls
+
+| Control | Where | Behaviour |
+|---|---|---|
+| Body size | `routes/publicRoutes.js` | Over 8 KB → `413`; non-object JSON → `400` |
+| Rate limit | `middleware/rateLimit.js` | Per IP: 10 submissions / 15 min → `429`. Tracks at most 10,000 addresses |
+| Honeypot | `publicLeadService.js` | A filled `website` field returns `201` with `number: null` and creates nothing |
+| Duplicate guard | `publicLeadService.js` | Same email + unit within 10 minutes returns the first lead instead of a second one |
+| Input sanitising | `publicLeadService.js` | Control, zero-width and bidi characters stripped; whitespace collapsed; non-string values treated as blank |
+
+Only these fields are accepted. Everything else in the body is ignored, so a caller cannot set `qualification`, `businessUnitId`, assignments or any other server-managed field. The response deliberately carries only the lead number and unit code, never the record.
+
+**Behind a reverse proxy**, set `app.set("trust proxy", 1)` in `app.js` so the limiter keys on the real client IP rather than the proxy's. The limiter is per process: with several nodes, put a shared limiter in front.
+
 ## Estimation (stage 2) & quote builder API
 
 The estimator's workflow state lives on the opportunity (`estimation*` fields, returned by every opportunity endpoint) and each step is its own endpoint. Writes need `estimation.update`; reads accept `leads.read` or `estimation.read`. The advance gate for stage 2: requirements confirmed, client input resolved (`estimationClientInfoNeeded = false`) and a quote with at least one item.
