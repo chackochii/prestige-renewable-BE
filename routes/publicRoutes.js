@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { createFromPublicForm } from "../modules/opportunity/controller/publicLeadController.js";
 import rateLimit from "../middleware/rateLimit.js";
+import { errorResponse } from "../utils/apiResponse.js";
 
 const router = Router();
 
@@ -17,9 +18,9 @@ const router = Router();
 const MAX_BODY_BYTES = 8 * 1024;
 const bodySizeGuard = (req, res, next) => {
     const declared = Number(req.headers["content-length"] || 0);
-    if (declared > MAX_BODY_BYTES) return res.status(413).json({ success: false, message: "Request is too large." });
+    if (declared > MAX_BODY_BYTES) return errorResponse(res, "Request is too large.", 413);
     if (req.body && (typeof req.body !== "object" || Array.isArray(req.body)))
-        return res.status(400).json({ success: false, message: "Send a JSON object." });
+        return errorResponse(res, "Send a JSON object.", 400);
     return next();
 };
 

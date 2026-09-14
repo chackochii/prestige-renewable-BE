@@ -10,20 +10,21 @@ import {
     loginUser,
 } from "../service/userService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
+import { successResponse } from "../../../utils/apiResponse.js";
 
 export const login = asyncHandler(async (req, res) => {
     const { email, password } = req.body;
 
     const { token, user } = await loginUser({ email, password });
 
-    res.status(200).json({ success: true, token, user });
+    successResponse(res, { token, user });
 });
 
 // Current user, resolved from the bearer token (tokenValidator sets req.user)
 export const me = asyncHandler(async (req, res) => {
     const user = await getUserWithPermissions(req.user.id);
 
-    res.status(200).json({ success: true, data: user });
+    successResponse(res, { data: user });
 });
 
 export const getAll = asyncHandler(async (req, res) => {
@@ -38,42 +39,42 @@ export const getAll = asyncHandler(async (req, res) => {
         req.user ?? null
     );
 
-    res.status(200).json({ success: true, ...result });
+    successResponse(res, result);
 });
 
 // People picker list for one business unit — names and roles only.
 export const directory = asyncHandler(async (req, res) => {
     const users = await listDirectory({ businessUnitId: req.query.businessUnitId }, req.user ?? null);
 
-    res.status(200).json({ success: true, data: users });
+    successResponse(res, { data: users });
 });
 
 export const getOne = asyncHandler(async (req, res) => {
     const user = await getUserForActor(req.params.id, req.user ?? null);
 
-    res.status(200).json({ success: true, data: user });
+    successResponse(res, { data: user });
 });
 
 export const create = asyncHandler(async (req, res) => {
     const user = await createUser(req.body, req.user ?? null);
 
-    res.status(201).json({ success: true, data: user });
+    successResponse(res, { data: user }, 201);
 });
 
 export const update = asyncHandler(async (req, res) => {
     const user = await updateUser(req.params.id, req.body, req.user ?? null);
 
-    res.status(200).json({ success: true, data: user });
+    successResponse(res, { data: user });
 });
 
 export const changePassword = asyncHandler(async (req, res) => {
     await resetPassword(req.params.id, req.body.password, req.user ?? null);
 
-    res.status(200).json({ success: true, message: "Password updated successfully" });
+    successResponse(res, { message: "Password updated successfully" });
 });
 
 export const remove = asyncHandler(async (req, res) => {
     await deleteUser(req.params.id, req.user ?? null);
 
-    res.status(200).json({ success: true, message: "User deleted successfully" });
+    successResponse(res, { message: "User deleted successfully" });
 });

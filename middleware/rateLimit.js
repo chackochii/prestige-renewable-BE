@@ -3,6 +3,7 @@
 // limiter in front (proxy, gateway) if the API ever runs on several nodes.
 // When the API sits behind a reverse proxy, set `app.set("trust proxy", 1)`
 // so req.ip is the client, not the proxy.
+import { errorResponse } from "../utils/apiResponse.js";
 
 /**
  * @param {{ windowMs?: number, max?: number, message?: string }} options
@@ -34,7 +35,7 @@ export const rateLimit = ({ windowMs = 15 * 60 * 1000, max = 10, message = "Too 
         res.setHeader("X-RateLimit-Remaining", String(Math.max(0, max - entry.count)));
         if (entry.count > max) {
             res.setHeader("Retry-After", String(Math.ceil((entry.resetAt - now) / 1000)));
-            return res.status(429).json({ success: false, message });
+            return errorResponse(res, message, 429);
         }
         return next();
     };

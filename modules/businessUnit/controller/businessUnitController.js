@@ -8,46 +8,47 @@ import {
     updateBusinessUnitConfig,
 } from "../service/businessUnitService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
+import { successResponse } from "../../../utils/apiResponse.js";
 
 // Scoped to the requesting user: assigned units only, everything for ADM.
 export const getAll = asyncHandler(async (req, res) => {
     const units = await listBusinessUnits(req.user);
 
-    res.status(200).json({ success: true, data: units });
+    successResponse(res, { data: units });
 });
 
 export const getOne = asyncHandler(async (req, res) => {
     const unit = await getBusinessUnit(req.params.id);
 
-    res.status(200).json({ success: true, data: unit });
+    successResponse(res, { data: unit });
 });
 
 export const create = asyncHandler(async (req, res) => {
     const unit = await createBusinessUnit(req.body);
 
-    res.status(201).json({ success: true, data: unit });
+    successResponse(res, { data: unit }, 201);
 });
 
 export const update = asyncHandler(async (req, res) => {
     const unit = await updateBusinessUnit(req.params.id, req.body);
 
-    res.status(200).json({ success: true, data: unit });
+    successResponse(res, { data: unit });
 });
 
 export const remove = asyncHandler(async (req, res) => {
     await deleteBusinessUnit(req.params.id);
 
-    res.status(200).json({ success: true, message: "Business unit deleted successfully" });
+    successResponse(res, { message: "Business unit deleted successfully" });
 });
 
 export const getConfig = asyncHandler(async (req, res) => {
     const config = await getBusinessUnitConfig(req.params.id);
 
-    res.status(200).json({ success: true, data: config });
+    successResponse(res, { data: config });
 });
 
 export const updateConfig = asyncHandler(async (req, res) => {
     const config = await updateBusinessUnitConfig(req.params.id, req.body);
 
-    res.status(200).json({ success: true, data: config });
+    successResponse(res, { data: config });
 });
