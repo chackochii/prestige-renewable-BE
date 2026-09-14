@@ -12,10 +12,21 @@ import {
 } from "../modules/user/controller/userController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import requirePermission from "../middleware/requirePermission.js";
+import rateLimit from "../middleware/rateLimit.js";
 
 const router = Router();
 
-router.post("/login", login); // { email, password } → { token, user }
+// Login is unauthenticated, so it gets the same per-IP limiter as the public
+// form: blunts credential stuffing and caps how many timing samples one
+// address can collect. Looser than the form because an office usually shares
+// one address. Set "trust proxy" if the API sits behind a reverse proxy.
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 15,
+    message: "Too many login attempts, try again in a few minutes.",
+});
+
+router.post("/login", loginLimiter, login); // { email, password } → { token, user }
 router.get("/me", tokenValidator, me); // current user from the bearer token
 
 // People directory for pickers: id, name, title, roles, status of the active
