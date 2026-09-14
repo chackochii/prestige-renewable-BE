@@ -15,14 +15,8 @@ const { User, BusinessUnit, UserBusinessUnit, Referrer, sequelize } = db;
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 // Model validation failures (email format, unknown roles, weak password) are
-// client errors, not server faults — surface them as 400s with field details.
-const asHttpError = (err) => {
-    if (err.name === "SequelizeValidationError" || err.name === "SequelizeUniqueConstraintError") {
-        const errors = err.errors?.map((e) => ({ field: e.path, message: e.message })) ?? null;
-        return Object.assign(httpError(400, errors?.[0]?.message ?? "Validation failed"), { errors });
-    }
-    return err;
-};
+// translated into 400s with field details by middleware/errorHandler, so the
+// writes below let them propagate.
 
 const USER_INCLUDES = [
     {
@@ -249,25 +243,21 @@ export const createUser = async (payload = {}, actor = null) => {
     }
 
     const user = await sequelize.transaction(async (transaction) => {
-        try {
-            const created = await User.create(
-                {
-                    name: name.trim(),
-                    email,
-                    password, // hashed by the model hook
-                    roles,
-                    title: title ?? null,
-                    phone: phone ?? null,
-                    status: status ?? "active",
-                    referrerId: referrerId ?? null,
-                },
-                { transaction }
-            );
-            if (unitIds.length) await syncBusinessUnits(created.id, unitIds, actorId, transaction);
-            return created;
-        } catch (err) {
-            throw asHttpError(err);
-        }
+        const created = await User.create(
+            {
+                name: name.trim(),
+                email,
+                password, // hashed by the model hook
+                roles,
+                title: title ?? null,
+                phone: phone ?? null,
+                status: status ?? "active",
+                referrerId: referrerId ?? null,
+            },
+            { transaction }
+        );
+        if (unitIds.length) await syncBusinessUnits(created.id, unitIds, actorId, transaction);
+        return created;
     });
 
     return getUser(user.id);
@@ -331,12 +321,8 @@ export const updateUser = async (id, payload = {}, actor = null) => {
     }
 
     await sequelize.transaction(async (transaction) => {
-        try {
-            await user.update(updates, { transaction });
-            if (unitIds !== null) await syncBusinessUnits(user.id, unitIds, actorId, transaction);
-        } catch (err) {
-            throw asHttpError(err);
-        }
+        await user.update(updates, { transaction });
+        if (unitIds !== null) await syncBusinessUnits(user.id, unitIds, actorId, transaction);
     });
 
     return getUser(id);
@@ -349,11 +335,7 @@ export const resetPassword = async (id, password, actor = null) => {
         throw httpError(400, "password is required (minimum 8 characters)");
     const user = await getUser(id);
     assertActorCanManage(await actorUnitScope(actor), user);
-    try {
-        await user.update({ password }); // hashed by the model hook
-    } catch (err) {
-        throw asHttpError(err);
-    }
+    await user.update({ password }); // hashed by the model hook
 };
 
 export const deleteUser = async (id, actor = null) => {
