@@ -31,6 +31,16 @@ export const tokenValidator = async (req, res, next) => {
         if (user.status !== "active")
             return errorResponse(res, "Account is disabled", 401);
 
+        // The units this user is assigned to, for deny-by-default unit scoping
+        // (see middleware/requireUnitAccess). Loaded once per request so guards
+        // and services can check membership without another query. ADM is
+        // unrestricted regardless of this list — see utils/unitScope.
+        const links = await db.UserBusinessUnit.findAll({
+            where: { userId: user.id },
+            attributes: ["businessUnitId"],
+        });
+        user.businessUnitIds = links.map((link) => link.businessUnitId);
+
         req.user = user;
         return next();
     } catch (err) {

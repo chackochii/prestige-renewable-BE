@@ -39,6 +39,7 @@ import {
 import tokenValidator from "../middleware/tokenValidator.js";
 import tokenFromQuery from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
+import { requireUnitAccess, requireOpportunityAccess } from "../middleware/requireUnitAccess.js";
 import { uploadFiles, uploadSingleFile } from "../middleware/upload.js";
 
 const router = Router();
@@ -54,11 +55,24 @@ const readAny = requireAnyPermission("leads.read", "estimation.read");
 // a download-scoped token in the query string (see tokenFromQuery). It uses
 // the same readAny guard as the attachment/document lists that hand out its
 // URLs, so anyone who can see a link can also open it.
-router.get("/:id/documents/:docId/file", tokenFromQuery, tokenValidator, readAny, downloadDocument);
+router.get(
+    "/:id/documents/:docId/file",
+    tokenFromQuery,
+    tokenValidator,
+    requireOpportunityAccess,
+    readAny,
+    downloadDocument
+);
 router.use(tokenValidator);
 
-router.get("/", read, getAll); // ?businessUnitId=&stage=&lifecycle=&search=&page=&pageSize=
-router.post("/", requirePermission("leads.create"), create); // lead payload + businessUnitId
+// Deny-by-default unit scoping (ADM excepted): a caller only reaches records
+// in the business units they are assigned to. Every /:id/... route below is
+// covered by this one mount — an out-of-scope record answers 404 before any
+// permission check — and the two unit-addressed routes check the id they name.
+router.use("/:id", requireOpportunityAccess);
+
+router.get("/", read, requireUnitAccess((req) => req.query.businessUnitId), getAll); // ?businessUnitId=&stage=&lifecycle=&search=&page=&pageSize=
+router.post("/", requirePermission("leads.create"), requireUnitAccess((req) => req.body?.businessUnitId), create); // lead payload + businessUnitId
 router.get("/:id", readAny, getOne);
 router.patch("/:id", write, update); // lead fields, all optional
 router.post("/:id/advance", requireAnyPermission("leads.update", "estimation.update"), advance); // next enabled stage; gates apply

@@ -178,6 +178,7 @@ Leads are opportunities at stage 1. The lead fields — customer, site (incl. `s
 
 Notes:
 
+- **Unit scoping** is deny-by-default, like user management: a caller only reaches opportunities in the business units they are assigned to (`users_business_units`); ADM is unrestricted. `tokenValidator` loads the caller's unit ids onto `req.user.businessUnitIds`, `router.use("/:id", requireOpportunityAccess)` answers **404** for any record outside those units (existence is not leaked), and the list/create routes answer **403** for a `businessUnitId` outside them. Applies to every `/api/opportunities/:id/...` route, including estimation, quote and file endpoints.
 - **Files** live on disk under `UPLOAD_DIR` (default `./uploads`, git-ignored). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
 - **Assignments** must be active users of the record's business unit (ADM anywhere) and each writes a `system` history entry.
 ## Public enquiry form (no token)
