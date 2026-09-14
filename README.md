@@ -170,7 +170,7 @@ Leads are opportunities at stage 1. The lead fields — customer, site (incl. `s
 | `GET` | `/api/opportunities/:id/documents` | `leads.read` | generic document rows (`type`, `stage`, `label`, `fileUrl`) |
 | `POST` | `/api/opportunities/:id/documents` | `leads.update` | multipart `files[]` (≤10 × 10 MB) + `type`, `stage?`, `label?` → refreshed opportunity |
 | `DELETE` | `/api/opportunities/:id/documents/:docId` | `leads.update` | → refreshed opportunity |
-| `GET` | `/api/opportunities/:id/documents/:docId/file` | `leads.read` | the file; `?download=1` forces a download |
+| `GET` | `/api/opportunities/:id/documents/:docId/file` | `leads.read` or `estimation.read` | the file; `?download=1` forces a download |
 | `POST` | `/api/opportunities/:id/assign-salesperson` | `leads.update` | `{ salespersonId \| null, reason? }` (reason required when unassigned) → refreshed opportunity |
 | `POST` | `/api/opportunities/:id/assign-estimator` | `leads.update` | `{ estimatorId }` → refreshed opportunity |
 | `POST` | `/api/opportunities/:id/assign-coordinator` | `leads.update` | `{ operationalCoordinatorId }` → refreshed opportunity |

@@ -9,7 +9,7 @@ import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 import { isEstimationReady } from "./estimationService.js";
 import { quoteHasItems } from "./quoteService.js";
 
-const { Opportunity, BusinessUnit, Referrer, User, Document } = db;
+const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -119,17 +119,40 @@ const normalizeSource = async (fields) => {
     return fields;
 };
 
-// PRS-26-0042: unit code, two-digit year, sequence. Soft-deleted rows keep
-// their number, so the scan is unscoped by paranoid to avoid reuse.
-const nextNumber = async (unit) => {
+// ---- Numbering --------------------------------------------------------------
+// PRS-26-0042: unit code, two-digit year, sequence. Reading the last number
+// and inserting the next is a classic race (two concurrent creates — e.g. the
+// public form — would pick the same sequence and the loser would trip the
+// unique index with a 500), so creation runs inside one transaction that
+// first takes a per-unit advisory lock. The lock is released on commit or
+// rollback, and other units are never blocked.
+
+// First key of the two-int advisory lock, so this lock never collides with
+// any other pg_advisory_xact_lock the app may add later.
+const NUMBERING_LOCK_KEY = 1;
+
+const lockNumbering = (unit, transaction) =>
+    sequelize.query("SELECT pg_advisory_xact_lock(:key, :unitId)", {
+        replacements: { key: NUMBERING_LOCK_KEY, unitId: unit.id },
+        transaction,
+    });
+
+// Soft-deleted rows keep their number, so the scan is unscoped by paranoid to
+// avoid reuse. Must be called with the numbering lock held (see createLead).
+const nextNumber = async (unit, transaction) => {
     const year = String(new Date().getFullYear()).slice(-2);
     const prefix = `${unit.code}-${year}-`;
     const last = await Opportunity.findOne({
         where: { number: { [Op.like]: `${prefix}%` } },
-        order: [["number", "DESC"]],
+        // Longest number first, then lexical: with a fixed prefix that is
+        // numeric order, so 10000 still sorts above 9999 once the padding
+        // is outgrown.
+        order: [[sequelize.fn("LENGTH", sequelize.col("number")), "DESC"], ["number", "DESC"]],
         paranoid: false,
+        transaction,
     });
-    const sequence = last ? Number(last.number.slice(prefix.length)) + 1 : 1;
+    const lastSequence = last ? Number(last.number.slice(prefix.length)) : 0;
+    const sequence = (Number.isInteger(lastSequence) && lastSequence > 0 ? lastSequence : 0) + 1;
     return `${prefix}${String(sequence).padStart(4, "0")}`;
 };
 
@@ -252,16 +275,24 @@ export const createLead = async (payload = {}, actor) => {
 
     const slaDays = Number(unit.slaDays?.[1] ?? 3);
     const now = new Date();
-    const opportunity = await Opportunity.create({
-        ...fields,
-        number: await nextNumber(unit),
-        businessUnitId: unit.id,
-        stage: 1,
-        lifecycle: "Active",
-        marginFloor: unit.marginFloor,
-        leadOwnerId: actor?.id ?? null,
-        slaStartedAt: now,
-        slaDueAt: new Date(now.getTime() + slaDays * 86400000),
+    // Lock, number and insert in one transaction so concurrent creates in the
+    // same unit queue up and each gets a distinct number.
+    const opportunity = await sequelize.transaction(async (transaction) => {
+        await lockNumbering(unit, transaction);
+        return Opportunity.create(
+            {
+                ...fields,
+                number: await nextNumber(unit, transaction),
+                businessUnitId: unit.id,
+                stage: 1,
+                lifecycle: "Active",
+                marginFloor: unit.marginFloor,
+                leadOwnerId: actor?.id ?? null,
+                slaStartedAt: now,
+                slaDueAt: new Date(now.getTime() + slaDays * 86400000),
+            },
+            { transaction }
+        );
     });
     return getOpportunity(opportunity.id);
 };

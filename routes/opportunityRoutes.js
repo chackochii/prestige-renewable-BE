@@ -43,17 +43,19 @@ import { uploadFiles, uploadSingleFile } from "../middleware/upload.js";
 
 const router = Router();
 
-// Every opportunity route needs a signed-in user; the file route also accepts
-// a download-scoped token in the query string (see tokenFromQuery).
-router.get("/:id/documents/:docId/file", tokenFromQuery, tokenValidator, requirePermission("leads.read"), downloadDocument);
-router.use(tokenValidator);
-
 // Guarded by the leads.* / estimation.* permissions from the RBAC catalog —
 // who holds them is edited on the roles screen, not here.
 const read = requirePermission("leads.read");
 const write = requirePermission("leads.update");
 const estimate = requirePermission("estimation.update"); // stage-2 work; independent of leads.update
 const readAny = requireAnyPermission("leads.read", "estimation.read");
+
+// Every opportunity route needs a signed-in user; the file route also accepts
+// a download-scoped token in the query string (see tokenFromQuery). It uses
+// the same readAny guard as the attachment/document lists that hand out its
+// URLs, so anyone who can see a link can also open it.
+router.get("/:id/documents/:docId/file", tokenFromQuery, tokenValidator, readAny, downloadDocument);
+router.use(tokenValidator);
 
 router.get("/", read, getAll); // ?businessUnitId=&stage=&lifecycle=&search=&page=&pageSize=
 router.post("/", requirePermission("leads.create"), create); // lead payload + businessUnitId
