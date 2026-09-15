@@ -231,11 +231,17 @@ const costFields = (payload, current = null) => {
     if (has("value") || !partial) {
         const value = num(payload.value) ?? 0;
         if (!Number.isFinite(value) || value < 0) throw httpError(400, "value cannot be negative");
-        const calcType = fields.calcType ?? current?.calcType ?? "fixed";
-        if (calcType === "percentage" && value > 100) throw httpError(400, "A percentage cost cannot exceed 100%");
         fields.value = value;
     }
     if (has("description")) fields.description = text(payload.description, 500) || null;
+
+    // The ceiling applies to the pair as it will be stored, so a partial
+    // update that flips calcType to percentage while keeping a fixed value
+    // above 100 is rejected just like sending both at once.
+    const effectiveCalcType = fields.calcType ?? current?.calcType ?? "fixed";
+    const effectiveValue = fields.value ?? Number(current?.value ?? 0);
+    if (effectiveCalcType === "percentage" && effectiveValue > 100)
+        throw httpError(400, "A percentage cost cannot exceed 100%");
     return fields;
 };
 
