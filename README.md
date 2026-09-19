@@ -49,6 +49,16 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@123
 
 # Public enquiry form (optional) — unit code used when the form sends none
 # PUBLIC_LEAD_UNIT_CODE=PRS
+
+# Notifications — how often to check for records past their SLA (0 disables)
+# SLA_CHECK_INTERVAL_MINUTES=15
+
+# Uploaded documents — DigitalOcean Spaces (required; the server won't start without them)
+DO_SPACES_ENDPOINT=https://syd1.digitaloceanspaces.com
+DO_SPACES_BUCKET=prestige-documents
+DO_SPACES_KEY=
+DO_SPACES_SECRET=
+# DO_SPACES_REGION=us-east-1
 ```
 
 | Variable | Required | Purpose |
@@ -62,6 +72,12 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@123
 | `SEED_SUPERADMIN_EMAIL` | no | Email of the seeded superadmin (default `superadmin@prestige.group`) |
 | `SEED_SUPERADMIN_PASSWORD` | no | Password of the seeded superadmin, stored bcrypt-hashed (default `ChangeMe@123`) |
 | `PUBLIC_LEAD_UNIT_CODE` | no | Business unit the public enquiry form files into when the request has no `businessUnit`; otherwise the first unit by code |
+| `SLA_CHECK_INTERVAL_MINUTES` | no (default 15) | How often to look for records past their stage SLA and notify whoever is assigned; `0` turns the check off |
+| `STREAM_TOKEN_EXPIRES_IN` | no (default 12h) | Lifetime of the token that opens the notification stream |
+| `DO_SPACES_ENDPOINT` | yes | The Space's region endpoint, e.g. `https://syd1.digitaloceanspaces.com` (not the bucket URL) |
+| `DO_SPACES_BUCKET` | yes | Name of the Space uploaded documents are stored in |
+| `DO_SPACES_KEY` / `DO_SPACES_SECRET` | yes | Spaces access key with read, write and delete on the Space |
+| `DO_SPACES_REGION` | no (default `us-east-1`) | Signing region; DigitalOcean's docs use `us-east-1` |
 
 > Keep the `SEED_SUPERADMIN_*` values in `.env` — the seeder's rollback (`db:seed:undo`) matches on the same email it seeded with.
 
@@ -179,8 +195,44 @@ Leads are opportunities at stage 1. The lead fields — customer, site (incl. `s
 Notes:
 
 - **Unit scoping** is deny-by-default, like user management: a caller only reaches opportunities in the business units they are assigned to (`users_business_units`); ADM is unrestricted. `tokenValidator` loads the caller's unit ids onto `req.user.businessUnitIds`, `router.use("/:id", requireOpportunityAccess)` answers **404** for any record outside those units (existence is not leaked), and the list/create routes answer **403** for a `businessUnitId` outside them. Applies to every `/api/opportunities/:id/...` route, including estimation, quote and file endpoints.
-- **Files** live on disk under `UPLOAD_DIR` (default `./uploads`, git-ignored). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
-- **Assignments** must be active users of the record's business unit (ADM anywhere) and each writes a `system` history entry.
+- **Files** live in a private DigitalOcean Space (`DO_SPACES_*`, see `utils/storage.js`) and are streamed back through the file route, never linked directly. Files saved to local disk by older versions can be moved into the Space with `npm run storage:copy-to-spaces` (reads `./uploads`). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
+- **Assignments** must be active users of the record's business unit (ADM anywhere), each writes a `system` history entry and notifies the person now assigned (see below).
+
+## Notifications
+
+Every in-app notice goes through one function — `notify()` in `modules/notification/service/notificationService.js`. Give it an event key, a title and who to tell (named user ids and/or every holder of a role in the unit); it resolves the priority, writes the rows and pushes them to any browser the recipients have open. The person who caused the event is never notified of their own action unless the caller passes `includeActor`.
+
+```js
+await notify({
+    event: "assignment.estimator",          // key from notificationEvents.js
+    title: `Estimator on ${opportunity.number}`,
+    body: "Assigned by Priya",
+    userIds: [estimator.id],                 // and/or roleCode: "SMM"
+    opportunity,                             // links the notice to the record
+    actor,                                   // excluded from the recipients
+    dedupeKey: `sla:${opportunity.id}`,      // optional: at most one per user
+});
+```
+
+**Priority** is `high`, `medium` or `low`, resolved in that order: what the caller passed → the unit's override (`business_units.notification_priorities`, edited on Admin → Unit settings) → the event's default in `modules/notification/service/notificationEvents.js`. Adding an event to that file is all a new notification needs; both the settings screen and the frontend read the list from `GET /api/notifications/events`.
+
+**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, plus the three existing role notices (new lead, estimation on hold, site visit needed).
+
+**Live delivery** is Server-Sent Events, not WebSocket — the traffic only goes one way, so the browser's own `EventSource` handles reconnection and no protocol upgrade is needed. Open connections are held in memory per process, so a multi-instance deploy needs `publish()` moved onto a shared bus (Redis pub/sub); nothing else changes.
+
+**SLA alerts** come from a plain interval started in `server.js` (`SLA_CHECK_INTERVAL_MINUTES`, 0 disables). It re-checks every few minutes; `dedupe_key` (unique with `user_id`) makes each deadline notify a person once, which also keeps it safe if two instances run it.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `GET` | `/api/notifications` | `?unread=1&priority=&event=&page=&pageSize=` → own notifications, newest first, plus `unread` |
+| `GET` | `/api/notifications/unread-count` | → `{ unread }` |
+| `GET` | `/api/notifications/events` | → the event catalogue with default priorities |
+| `PATCH` | `/api/notifications/:id/read` | `{ read?: true }` → the notification |
+| `POST` | `/api/notifications/read-all` | → `{ updated }` |
+| `POST` | `/api/notifications/stream-token` | → `{ token }` — short-lived, opens the stream and nothing else |
+| `GET` | `/api/notifications/stream?token=…` | SSE: `ready` (with the unread count) then a `notification` event per notice |
+
+No permission gates these — the service scopes every query to the caller, who only ever sees their own.
 ## Public enquiry form (no token)
 
 The website enquiry form (`/enquiry` in prestige-fe) talks to one unauthenticated route.

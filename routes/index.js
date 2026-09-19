@@ -1,6 +1,7 @@
 import { Router } from "express";
 import businessUnitRoutes from "./businessUnitRoutes.js";
 import catalogRoutes from "./catalogRoutes.js";
+import notificationRoutes from "./notificationRoutes.js";
 import opportunityRoutes from "./opportunityRoutes.js";
 import pageRoutes from "./pageRoutes.js";
 import publicRoutes from "./publicRoutes.js";
@@ -16,6 +17,7 @@ router.get("/", (req, res) => {
 
 router.use("/business-units", businessUnitRoutes);
 router.use("/catalog", catalogRoutes);
+router.use("/notifications", notificationRoutes);
 router.use("/opportunities", opportunityRoutes);
 router.use("/pages", pageRoutes);
 router.use("/public", publicRoutes); // no token: website enquiry form

@@ -23,4 +23,13 @@ export const signDownloadToken = (user, documentId) =>
         expiresIn: process.env.DOWNLOAD_TOKEN_EXPIRES_IN || "2h",
     });
 
+// Short-lived token for the notification stream. EventSource cannot set an
+// Authorization header, so the browser fetches this over the normal API and
+// puts it in the stream URL; it opens nothing else (scope is checked by
+// tokenValidator against the route's declared scope).
+export const signStreamToken = (user) =>
+    jwt.sign({ sub: String(user.id), scope: "stream" }, secret(), {
+        expiresIn: process.env.STREAM_TOKEN_EXPIRES_IN || "12h",
+    });
+
 export const verifyToken = (token) => jwt.verify(token, secret());

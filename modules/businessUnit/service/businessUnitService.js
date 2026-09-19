@@ -5,6 +5,7 @@
 import db from "../../../models/index.js";
 import { disabledPageCodesByUnit } from "../../page/service/pageService.js";
 import { SUPER_ROLE_CODE } from "../../role/service/roleService.js";
+import { PRIORITIES, isEventKey, isPriority } from "../../notification/service/notificationEvents.js";
 import { parseId } from "../../../utils/ids.js";
 
 const { BusinessUnit, UserBusinessUnit, Opportunity } = db;
@@ -112,6 +113,18 @@ const validateMetadata = (value) => {
     return value;
 };
 
+// How loudly this unit wants each notification event: { "<event key>": "high" }.
+// Events the unit says nothing about keep the default from notificationEvents.js.
+const validateNotificationPriorities = (value) => {
+    if (!isPlainObject(value)) throw httpError(400, "notificationPriorities must be an object");
+    for (const [event, priority] of Object.entries(value)) {
+        if (!isEventKey(event)) throw httpError(400, `notificationPriorities key "${event}" is not a notification event`);
+        if (!isPriority(priority))
+            throw httpError(400, `notificationPriorities["${event}"] must be ${PRIORITIES.join(", ")}`);
+    }
+    return value;
+};
+
 const CONFIG_VALIDATORS = {
     billingSplit: validateBillingSplit,
     commissionTiers: validateCommissionTiers,
@@ -121,6 +134,7 @@ const CONFIG_VALIDATORS = {
     slaDays: validateSlaDays,
     marginFloor: validateMarginFloor,
     metadata: validateMetadata,
+    notificationPriorities: validateNotificationPriorities,
 };
 
 // Returns only the recognised config fields from payload, validated & normalised

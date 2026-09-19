@@ -41,6 +41,13 @@ export default (sequelize, DataTypes) => {
                 allowNull: false,
                 defaultValue: { 1: 3, 2: 5, 3: 7, 4: 10, 5: 15, 6: 10, 7: 20, 8: 7, 9: 5, approval: 15 },
             },
+            // Per-unit notification priority overrides: { "<event key>": "high" }.
+            // Events not named here keep the default in notificationEvents.js.
+            notificationPriorities: {
+                type: DataTypes.JSONB,
+                allowNull: false,
+                defaultValue: {},
+            },
             // Pipeline stages this unit uses. Numbers stay stable (1–9); disabled
             // stages are skipped, not renumbered, so slaDays and reporting line up.
             enabledStages: {

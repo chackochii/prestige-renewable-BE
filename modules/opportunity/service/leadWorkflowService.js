@@ -2,12 +2,12 @@
 // field edits: the job-history log, role assignments (salesperson, estimator,
 // operational coordinator) and the business-owner notification. Each
 // assignment writes a system entry to the history so the trail is complete.
-import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { SUPER_ROLE_CODE } from "../../role/service/roleService.js";
+import { notify } from "../../notification/service/notificationService.js";
 
-const { Opportunity, OpportunityHistory, User, UserBusinessUnit, BusinessUnit, Notification } = db;
+const { Opportunity, OpportunityHistory, User, UserBusinessUnit, BusinessUnit } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -110,7 +110,10 @@ export const assignSalesperson = async (id, payload = {}, actor) => {
     const user = await assertAssignable(payload.salespersonId, opportunity, "salesperson");
     const changed = opportunity.salespersonId !== user.id;
     await opportunity.update({ salespersonId: user.id, unassignedReason: null });
-    if (changed) await recordSystemEvent(opportunity, `Salesperson assigned: ${user.name}`, actor);
+    if (changed) {
+        await recordSystemEvent(opportunity, `Salesperson assigned: ${user.name}`, actor);
+        await notifyAssignee(opportunity, { event: "assignment.salesperson", user, role: "Salesperson" }, actor);
+    }
     return opportunity.id;
 };
 
@@ -121,7 +124,10 @@ export const assignEstimator = async (id, payload = {}, actor) => {
     const user = await assertAssignable(payload.estimatorId, opportunity, "estimator");
     const changed = opportunity.estimatorId !== user.id;
     await opportunity.update({ estimatorId: user.id });
-    if (changed) await recordSystemEvent(opportunity, `Estimator assigned: ${user.name}`, actor);
+    if (changed) {
+        await recordSystemEvent(opportunity, `Estimator assigned: ${user.name}`, actor);
+        await notifyAssignee(opportunity, { event: "assignment.estimator", user, role: "Estimator" }, actor);
+    }
     return opportunity.id;
 };
 
@@ -132,47 +138,39 @@ export const assignCoordinator = async (id, payload = {}, actor) => {
     const user = await assertAssignable(payload.operationalCoordinatorId, opportunity, "operational coordinator");
     const changed = opportunity.operationalCoordinatorId !== user.id;
     await opportunity.update({ operationalCoordinatorId: user.id, needsClientVisit: true });
-    if (changed) await recordSystemEvent(opportunity, `Operational coordinator assigned: ${user.name}`, actor);
+    if (changed) {
+        await recordSystemEvent(opportunity, `Operational coordinator assigned: ${user.name}`, actor);
+        await notifyAssignee(
+            opportunity,
+            { event: "assignment.coordinator", user, role: "Operations coordinator" },
+            actor
+        );
+    }
     return opportunity.id;
 };
 
 // ---- Notifications ----------------------------------------------------------
 
-// Active users in the record's unit holding the role, plus any explicitly
-// named users (e.g. the assigned salesperson) — de-duplicated.
-const recipientsFor = async (opportunity, roleCode, extraUserIds = []) => {
-    const links = await UserBusinessUnit.findAll({
-        where: { businessUnitId: opportunity.businessUnitId },
-        attributes: ["userId"],
-    });
-    const holders = links.length
-        ? await User.findAll({
-              where: {
-                  id: { [Op.in]: links.map((link) => link.userId) },
-                  status: "active",
-                  roles: { [Op.contains]: [roleCode] },
-              },
-              attributes: ["id", "name"],
-          })
-        : [];
-    const extraIds = extraUserIds.filter((userId) => userId && !holders.some((u) => u.id === userId));
-    const extras = extraIds.length
-        ? await User.findAll({ where: { id: { [Op.in]: extraIds }, status: "active" }, attributes: ["id", "name"] })
-        : [];
-    return [...holders, ...extras];
-};
-
 /**
- * Creates an in-app notification for every recipient and records who was
- * told in the job history. Zero recipients is not an error (the unit may
- * simply have nobody in that role yet).
+ * Notifies every holder of a role in the record's unit (plus any named users,
+ * e.g. the assigned salesperson) and records who was told in the job history.
+ * Zero recipients is not an error — the unit may simply have nobody in that
+ * role yet. The notification itself is raised by notificationService.notify,
+ * which decides the priority and pushes it to open browsers.
  */
-const notifyRole = async (opportunity, { roleCode, roleLabel, extraUserIds, title, body }, actor) => {
-    const recipients = await recipientsFor(opportunity, roleCode, extraUserIds);
-    if (recipients.length)
-        await Notification.bulkCreate(
-            recipients.map((user) => ({ userId: user.id, opportunityId: opportunity.id, title, body }))
-        );
+const notifyRole = async (opportunity, { event, roleCode, roleLabel, extraUserIds = [], title, body }, actor) => {
+    const { recipients } = await notify({
+        event,
+        title,
+        body,
+        roleCode,
+        userIds: extraUserIds,
+        opportunity,
+        actor,
+        // A notification someone triggers for a role they hold themselves is
+        // still worth keeping in their inbox — it is the record of the handoff.
+        includeActor: true,
+    });
     await recordSystemEvent(
         opportunity,
         recipients.length
@@ -180,8 +178,22 @@ const notifyRole = async (opportunity, { roleCode, roleLabel, extraUserIds, titl
             : `No ${roleLabel.toLowerCase()} account in this unit to notify`,
         actor
     );
-    return { notified: recipients.length, recipients: recipients.map((u) => ({ id: u.id, name: u.name })) };
+    return { notified: recipients.length, recipients };
 };
+
+/**
+ * Tells someone work has landed on them. Called by every assignment below, so
+ * a new assignment kind only has to add its event to notificationEvents.js.
+ */
+const notifyAssignee = (opportunity, { event, user, role }, actor) =>
+    notify({
+        event,
+        title: `${role} on ${opportunity.number}`,
+        body: `${customerOf(opportunity)} — you are now the ${role.toLowerCase()}${actor?.name ? `, assigned by ${actor.name}` : ""}.`,
+        userIds: [user.id],
+        opportunity,
+        actor, // assigning work to yourself raises nothing
+    });
 
 const unitNameOf = async (opportunity) =>
     (await BusinessUnit.findByPk(opportunity.businessUnitId, { attributes: ["id", "name"] }))?.name ?? "the business unit";
@@ -195,6 +207,7 @@ export const notifyBusinessOwner = async (id, actor) => {
     return notifyRole(
         opportunity,
         {
+            event: "lead.captured",
             roleCode: BUSINESS_OWNER_ROLE,
             roleLabel: "Business owner",
             title: `New lead ${opportunity.number}`,
@@ -214,6 +227,7 @@ export const notifySalesManager = async (id, actor) => {
     return notifyRole(
         opportunity,
         {
+            event: "estimation.on_hold",
             roleCode: SALES_MANAGER_ROLE,
             roleLabel: "Sales manager",
             extraUserIds: [opportunity.salespersonId],
@@ -233,6 +247,7 @@ export const notifyOperationsCoordinator = async (id, actor) => {
     return notifyRole(
         opportunity,
         {
+            event: "estimation.site_visit",
             roleCode: OPERATIONS_COORDINATOR_ROLE,
             roleLabel: "Operations coordinator",
             extraUserIds: [opportunity.operationalCoordinatorId],

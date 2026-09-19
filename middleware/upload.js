@@ -1,9 +1,10 @@
 import multer from "multer";
 
 // Multipart parsing for document uploads. Files are held in memory (they are
-// small — 10 MB cap) and written to the upload directory by the document
-// service, which owns naming and the database row. Multer's own errors have
-// no .status, so they are translated here into ordinary 400s.
+// small — 10 MB cap) so the document service can check the file type before
+// anything is stored; it then writes them to DigitalOcean Spaces (see
+// utils/storage.js) and owns naming and the database row. Multer's own errors
+// have no .status, so they are translated here into ordinary 400s.
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_FILES = 10;
 

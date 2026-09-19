@@ -1,25 +1,23 @@
 // Lead-stage attachments on an opportunity: the client-meeting log (kept in
 // the opportunities.meetings JSONB column) and uploaded documents (rows in
-// documents, files on local disk under UPLOAD_DIR).
+// documents, files in DigitalOcean Spaces — see utils/storage.js).
 //
 // Two views of the same documents exist: the generic document API (type,
 // stage, label — used by later pipeline stages) and the lead screens'
 // "attachments" (photo | sketch | bill | document categories, each with a
 // URL the browser can open directly).
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { signDownloadToken } from "../../../utils/jwt.js";
+import storage from "../../../utils/storage.js";
 
 const { Opportunity, Document, User } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 // ---- Storage ----------------------------------------------------------------
-
-export const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || "uploads");
 
 // MIME type by extension. The type a client declares in the multipart part is
 // never stored — a browser would render it, so it must come from the server.
@@ -70,13 +68,6 @@ const safeFileName = (name) => {
 };
 
 const extensionOf = (name) => path.extname(String(name || "")).slice(1).toLowerCase();
-
-const absolutePath = (relative) => {
-    const resolved = path.resolve(UPLOAD_DIR, relative);
-    // A stored path must stay inside the upload directory.
-    if (!resolved.startsWith(UPLOAD_DIR + path.sep)) throw httpError(400, "Invalid document path");
-    return resolved;
-};
 
 const loadOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
@@ -181,7 +172,7 @@ export const listAttachments = async (id, actor) => {
     return (await findDocuments(opportunity.id)).map((doc) => presentAttachment(doc, actor));
 };
 
-// Writes the files to disk and records one document row each. Returns the
+// Writes the files to storage and records one document row each. Returns the
 // rows (with uploader) in the order given.
 const storeFiles = async (opportunity, files, { type, stage, label }, actor) => {
     if (!files.length) throw httpError(400, "Attach at least one file");
@@ -190,23 +181,21 @@ const storeFiles = async (opportunity, files, { type, stage, label }, actor) => 
             throw httpError(400, `${file.originalname}: file type not allowed`);
     }
 
-    const folder = path.join("opportunities", String(opportunity.id));
-    await fs.mkdir(path.join(UPLOAD_DIR, folder), { recursive: true });
-
     const created = [];
     for (const file of files) {
-        const relative = path.join(folder, safeFileName(file.originalname));
-        await fs.writeFile(path.join(UPLOAD_DIR, relative), file.buffer);
+        const key = `opportunities/${opportunity.id}/${safeFileName(file.originalname)}`;
+        const mime = MIME_BY_EXTENSION[extensionOf(file.originalname)] || "application/octet-stream";
+        await storage.put(key, file.buffer, { contentType: mime });
         const doc = await Document.create({
             opportunityId: opportunity.id,
             type,
             name: String(file.originalname).slice(0, 255),
             uploaderId: actor?.id ?? null,
             size: formatSize(file.size),
-            url: relative.split(path.sep).join("/"),
+            url: key,
             label,
             stage,
-            mime: MIME_BY_EXTENSION[extensionOf(file.originalname)] || "application/octet-stream",
+            mime,
             mirrorStatus: "pending",
         });
         created.push(doc.id);
@@ -253,25 +242,20 @@ export const removeDocument = async (id, docId) => {
     if (!doc) throw httpError(404, "Document not found");
     if (doc.url) {
         try {
-            await fs.unlink(absolutePath(doc.url));
+            await storage.remove(doc.url);
         } catch (err) {
-            if (err.code !== "ENOENT" && err.status !== 400) throw err;
+            // A stored path that fails validation can't point at a real file.
+            if (err.status !== 400) throw err;
         }
     }
     await doc.destroy();
 };
 
-/** Resolves a document to its on-disk file for sending. */
+/** Opens a document's stored file for sending: { doc, file: { body (stream), size } }. */
 export const getDocumentFile = async (id, docId) => {
     const opportunity = await loadOpportunity(id);
     const doc = await Document.findOne({ where: { id: parseId(docId, "document id"), opportunityId: opportunity.id } });
     if (!doc) throw httpError(404, "Document not found");
     if (!doc.url) throw httpError(404, "This document has no stored file");
-    const filePath = absolutePath(doc.url);
-    try {
-        await fs.access(filePath);
-    } catch {
-        throw httpError(404, "The stored file is missing");
-    }
-    return { doc, filePath };
+    return { doc, file: await storage.open(doc.url) };
 };

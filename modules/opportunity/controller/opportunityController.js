@@ -1,3 +1,4 @@
+import { pipeline } from "node:stream/promises";
 import {
     listOpportunities,
     getOpportunity,
@@ -147,19 +148,24 @@ export const downloadDocument = asyncHandler(async (req, res) => {
     if (scoped && Number(req.tokenPayload.doc) !== Number(req.params.docId))
         return errorResponse(res, "This link is for a different document", 403);
 
-    const { doc, filePath } = await getDocumentFile(req.params.id, req.params.docId);
+    const { doc, file } = await getDocumentFile(req.params.id, req.params.docId);
     const mime = doc.mime || "application/octet-stream";
     const inline = INLINE_MIME.test(mime) && req.query.download !== "1";
 
-    return res.sendFile(filePath, {
-        headers: {
-            "Content-Type": mime,
-            "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(doc.name)}`,
-            "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
-            "Cache-Control": "private, max-age=3600",
-        },
+    res.set({
+        "Content-Type": mime,
+        "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(doc.name)}`,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+        "Cache-Control": "private, max-age=3600",
+        ...(file.size !== undefined ? { "Content-Length": String(file.size) } : {}),
     });
+    try {
+        await pipeline(file.body, res);
+    } catch (err) {
+        // The browser dropping the connection early (a cancelled image load) is not a server error.
+        if (err.code !== "ERR_STREAM_PREMATURE_CLOSE") throw err;
+    }
 });
 
 // ---- Assignments & notifications --------------------------------------------

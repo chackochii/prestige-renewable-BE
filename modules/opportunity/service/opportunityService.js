@@ -8,6 +8,8 @@ import { parseId } from "../../../utils/ids.js";
 import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 import { isEstimationReady } from "./estimationService.js";
 import { quoteHasItems } from "./quoteService.js";
+import { notify } from "../../notification/service/notificationService.js";
+import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -316,8 +318,22 @@ export const updateLead = async (id, payload = {}, actor) => {
     if (fields.salespersonId !== undefined)
         fields.salespersonId = await assertUserExists(fields.salespersonId, "salesperson");
     if (payload.lifecycle !== undefined) fields.lifecycle = payload.lifecycle; // model validates the value
+    const lifecycleWas = opportunity.lifecycle;
 
     await opportunity.update(fields);
+
+    // Closing a record (won, lost, or closed out) is news for everyone working
+    // on it — a field edit is not.
+    if (fields.lifecycle && fields.lifecycle !== lifecycleWas && fields.lifecycle !== "Active")
+        await notify({
+            event: "lifecycle.changed",
+            title: `${opportunity.number} marked ${fields.lifecycle.toLowerCase()}`,
+            body: `${customerLabel(opportunity)} — ${lifecycleWas.toLowerCase()} → ${fields.lifecycle.toLowerCase()}${actor?.name ? ` by ${actor.name}` : ""}.`,
+            userIds: assignedUserIds(opportunity),
+            opportunity,
+            actor,
+        });
+
     return getOpportunity(opportunity.id);
 };
 
@@ -354,11 +370,22 @@ export const advanceStage = async (id, actor) => {
 
     const slaDays = Number(unit?.slaDays?.[next] ?? 0);
     const now = new Date();
+    const from = opportunity.stage;
     await opportunity.update({
         stage: next,
         slaStartedAt: now,
         slaDueAt: slaDays ? new Date(now.getTime() + slaDays * 86400000) : null,
     });
+
+    await notify({
+        event: "stage.advanced",
+        title: `${opportunity.number} moved to stage ${next}`,
+        body: `${customerLabel(opportunity)} — stage ${from} → ${next}${actor?.name ? `, moved by ${actor.name}` : ""}.`,
+        userIds: assignedUserIds(opportunity),
+        opportunity,
+        actor,
+    });
+
     return getOpportunity(opportunity.id);
 };
 

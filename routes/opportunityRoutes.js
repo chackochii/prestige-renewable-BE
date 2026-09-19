@@ -37,7 +37,7 @@ import {
     deleteQuoteCost,
 } from "../modules/opportunity/controller/opportunityController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
-import tokenFromQuery from "../middleware/tokenFromQuery.js";
+import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
 import { requireUnitAccess, requireOpportunityAccess } from "../middleware/requireUnitAccess.js";
 import { uploadFiles, uploadSingleFile } from "../middleware/upload.js";
@@ -57,7 +57,7 @@ const readAny = requireAnyPermission("leads.read", "estimation.read");
 // URLs, so anyone who can see a link can also open it.
 router.get(
     "/:id/documents/:docId/file",
-    tokenFromQuery,
+    tokenFromQuery("download"),
     tokenValidator,
     requireOpportunityAccess,
     readAny,
