@@ -10,6 +10,8 @@
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { assertAssignable, recordSystemEvent } from "./leadWorkflowService.js";
+import { sanitizeEstimationInput } from "./estimationInput.js";
+import { notify } from "../../notification/service/notificationService.js";
 
 const { Opportunity } = db;
 
@@ -124,5 +126,59 @@ export const submitChecklist = async (id, payload = {}, actor) => {
         await recordSystemEvent(opportunity, "Pre-site inspection completed", actor);
 
     await opportunity.update(update);
+    return opportunity.id;
+};
+
+// ---- The lead checklist's optional rows --------------------------------------
+// Sales fills what they can while capturing the lead; estimation collects the
+// rest straight from the client rather than sending it back. Both write into
+// the same object on the record (see ESTIMATION_INPUT_KEYS).
+
+/** { input } — a partial estimationInput, merged over what is already there. */
+export const collectInputs = async (id, payload = {}, actor) => {
+    const opportunity = await loadOpportunity(id);
+    const patch = sanitizeEstimationInput(payload?.input);
+    if (!Object.keys(patch).length) throw httpError(400, "Send at least one input to collect");
+
+    await opportunity.update({ estimationInput: { ...(opportunity.estimationInput || {}), ...patch } });
+    await recordSystemEvent(
+        opportunity,
+        `Estimation collected: ${Object.keys(patch).join(", ")}`,
+        actor
+    );
+    return opportunity.id;
+};
+
+/**
+ * The estimator confirming what sales supplied is enough to start pricing.
+ * Sending it back instead goes through submitRequirements({ received: false }).
+ */
+export const acceptInputs = async (id, actor) => {
+    const opportunity = await loadOpportunity(id);
+    if (opportunity.estimationInputsAcceptedAt) return opportunity.id; // already accepted — idempotent
+
+    await opportunity.update({
+        estimationInputsAcceptedAt: new Date(),
+        estimationInputsAcceptedById: actor?.id ?? null,
+        estimationRequirementsReceived: true,
+    });
+    await recordSystemEvent(opportunity, "Estimation accepted the lead inputs", actor);
+    if (opportunity.salespersonId)
+        await notify({
+            event: "estimation.inputs.accepted",
+            title: `${opportunity.number}: estimation has what it needs`,
+            body: `${actor?.name || "The estimator"} accepted the lead inputs — pricing can start.`,
+            userIds: [opportunity.salespersonId],
+            opportunity,
+            actor,
+        });
+    return opportunity.id;
+};
+
+/** The estimator clearing the "lead details changed" notice on their screen. */
+export const acknowledgeLeadChange = async (id, actor) => {
+    const opportunity = await loadOpportunity(id);
+    await opportunity.update({ leadChangeAcknowledgedAt: new Date(), leadChangeSummary: null });
+    await recordSystemEvent(opportunity, "Lead change acknowledged", actor);
     return opportunity.id;
 };

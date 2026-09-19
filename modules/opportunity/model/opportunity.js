@@ -1,6 +1,42 @@
 // Pipeline stages:
 // 1 Lead · 2 Estimation · 3 Proposal · 4 Sales closure · 5 Approvals
 // 6 Procurement · 7 Site works · 8 Billing · 9 Handover
+
+// Lead-checklist option keys. These mirror
+// prestige-fe/src/features/leads/propertyOptions.js — keep them in step, the
+// screens label them from the same keys.
+export const SERVICE_REQUIREMENTS = ["solar", "battery", "both"];
+export const STOREY_OPTIONS = ["single", "double"];
+export const ROOF_TYPES = ["tin", "tile", "colorbond"];
+export const ELECTRICAL_PHASES = ["1_phase", "3_phase"];
+export const INSTALL_TIMEFRAMES = ["asap", "1_3_months", "3_6_months", "6_months_plus", "undecided"];
+
+/**
+ * The optional checklist rows estimation inherits, stored as one object on
+ * the record. Anything not listed here is dropped on write — see
+ * prestige-fe/src/constants/estimationInput.js for the same list.
+ */
+export const ESTIMATION_INPUT_KEYS = [
+    // Project & site
+    "siteType", "preSiteInspectionRequired", "siteCrewAssigneeId", "inspectionStatus",
+    "siteVisitCompleted", "roofMeasurements",
+    // Existing electrical
+    "existingElectrical", "switchboardLocation", "switchboardCondition", "switchboardUpgrade",
+    "loadRequirements",
+    // Existing system (retrofit only)
+    "isRetrofit", "existingSolarKw", "existingInverter", "existingBattery", "existingSystemNotes",
+    // New system specification
+    "panelQty", "panelCapacityW", "preferredBrands", "inverterBrandModel", "batteryBrandModel",
+    "batteryCapacityKwh", "backupRequirement", "backupDuration",
+    // Installation requirements
+    "mountingRequirements", "cableRequirements", "siteConstraints", "specialRequirements",
+    // Compliance
+    "permits", "vppDiscussed", "vppEligibility", "vppNotes", "permitNotes", "meterRequirements",
+    "drawingsNotes",
+    // Customer
+    "inclusions", "exclusions", "noteForEstimator",
+];
+
 export default (sequelize, DataTypes) => {
     const Opportunity = sequelize.define(
         "Opportunity",
@@ -57,6 +93,15 @@ export default (sequelize, DataTypes) => {
             customerEmail: { type: DataTypes.STRING },
             customerPhone: { type: DataTypes.STRING },
             customerBillingAddress: { type: DataTypes.STRING },
+            customerFirstName: { type: DataTypes.STRING(100) },
+            customerLastName: { type: DataTypes.STRING(100) },
+            // Blank means English — see prestige-fe/src/constants/languages.js.
+            preferredLanguage: { type: DataTypes.STRING(40) },
+            billingSameAsSite: { type: DataTypes.STRING(3), validate: { isIn: [["yes", "no"]] } },
+            customerComments: { type: DataTypes.TEXT },
+            customerIntentConfirmed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            customerBudget: { type: DataTypes.DECIMAL(12, 2) },
+            businessOffers: { type: DataTypes.TEXT },
 
             // Site
             siteLine1: { type: DataTypes.STRING },
@@ -160,6 +205,33 @@ export default (sequelize, DataTypes) => {
             estimationPreSiteInspectionRequired: { type: DataTypes.BOOLEAN, allowNull: true },
             estimationSiteVisitAssigneeId: { type: DataTypes.INTEGER, allowNull: true },
             estimationSiteVisitCompleted: { type: DataTypes.BOOLEAN, allowNull: true },
+
+            // ---- Lead checklist: what sales confirms with the customer ------
+            // The mandatory rows gate "potential client" (see assertCanQualify);
+            // the option keys mirror prestige-fe/src/features/leads/propertyOptions.js.
+            serviceRequirement: { type: DataTypes.STRING(20), validate: { isIn: [SERVICE_REQUIREMENTS] } },
+            propertyStoreys: { type: DataTypes.STRING(10), validate: { isIn: [STOREY_OPTIONS] } },
+            roofType: { type: DataTypes.STRING(20), validate: { isIn: [ROOF_TYPES] } },
+            electricalPhase: { type: DataTypes.STRING(10), validate: { isIn: [ELECTRICAL_PHASES] } },
+            financeAssistance: { type: DataTypes.STRING(10), validate: { isIn: [["yes", "no"]] } },
+            financeNotes: { type: DataTypes.TEXT },
+            siteRequirementsNone: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            siteSpecificRequirements: { type: DataTypes.TEXT },
+            preferredInstallTimeframe: { type: DataTypes.STRING(20), validate: { isIn: [INSTALL_TIMEFRAMES] } },
+            preferredInstallLocation: { type: DataTypes.STRING(255) },
+
+            // The optional checklist rows, carried to estimation as one object
+            // (keys in ESTIMATION_INPUT_KEYS) rather than 40 columns nothing
+            // else queries.
+            estimationInput: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+            estimationInputsAcceptedAt: { type: DataTypes.DATE },
+            estimationInputsAcceptedById: { type: DataTypes.INTEGER },
+
+            // "Lead details changed": set when a handed-over lead is edited,
+            // cleared when the estimator acknowledges it.
+            leadEditedAt: { type: DataTypes.DATE },
+            leadChangeSummary: { type: DataTypes.TEXT },
+            leadChangeAcknowledgedAt: { type: DataTypes.DATE },
         },
         {
             tableName: "opportunities",

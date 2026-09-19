@@ -28,8 +28,16 @@ import {
     notifyBusinessOwner,
     notifySalesManager,
     notifyOperationsCoordinator,
+    notifyEstimator,
 } from "../service/leadWorkflowService.js";
-import { submitRequirements, submitClientInfo, submitChecklist } from "../service/estimationService.js";
+import {
+    submitRequirements,
+    submitClientInfo,
+    submitChecklist,
+    collectInputs,
+    acceptInputs,
+    acknowledgeLeadChange,
+} from "../service/estimationService.js";
 import * as quotes from "../service/quoteService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse, errorResponse } from "../../../utils/apiResponse.js";
@@ -143,9 +151,9 @@ export const deleteDocument = asyncHandler(async (req, res) => {
 });
 
 export const downloadDocument = asyncHandler(async (req, res) => {
-    // A download-scoped token is bound to one document.
+    // A download-scoped token is bound to one document of one kind.
     const scoped = req.tokenPayload?.scope === "download";
-    if (scoped && Number(req.tokenPayload.doc) !== Number(req.params.docId))
+    if (scoped && (Number(req.tokenPayload.doc) !== Number(req.params.docId) || (req.tokenPayload.kind ?? "document") !== "document"))
         return errorResponse(res, "This link is for a different document", 403);
 
     const { doc, file } = await getDocumentFile(req.params.id, req.params.docId);
@@ -288,4 +296,34 @@ export const deleteQuoteCost = asyncHandler(async (req, res) => {
     await quotes.removeCost(req.params.id, req.params.costId);
 
     successResponse(res, { message: "Quote cost removed" });
+});
+
+// ---- Lead checklist: the optional rows estimation inherits -------------------
+
+export const estimationCollectedInputs = asyncHandler(async (req, res) => {
+    await collectInputs(req.params.id, req.body, req.user);
+    const opportunity = await getOpportunity(req.params.id);
+
+    successResponse(res, { data: opportunity });
+});
+
+export const estimationAcceptInputs = asyncHandler(async (req, res) => {
+    await acceptInputs(req.params.id, req.user);
+    const opportunity = await getOpportunity(req.params.id);
+
+    successResponse(res, { data: opportunity });
+});
+
+export const estimationAcknowledgeLeadChange = asyncHandler(async (req, res) => {
+    await acknowledgeLeadChange(req.params.id, req.user);
+    const opportunity = await getOpportunity(req.params.id);
+
+    successResponse(res, { data: opportunity });
+});
+
+/** Sales telling the assigned estimator the lead pack changed under them. */
+export const notifyEstimatorOfChange = asyncHandler(async (req, res) => {
+    const result = await notifyEstimator(req.params.id, req.body, req.user);
+
+    successResponse(res, { data: result });
 });

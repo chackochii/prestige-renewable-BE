@@ -257,3 +257,27 @@ export const notifyOperationsCoordinator = async (id, actor) => {
         actor
     );
 };
+
+/**
+ * Tells the assigned estimator that the lead pack changed under them, after a
+ * save on a record already handed over. { summary? } — what changed, in the
+ * saver's words; it is kept on the record until the estimator acknowledges it.
+ */
+export const notifyEstimator = async (id, payload = {}, actor) => {
+    const opportunity = await loadOpportunity(id);
+    if (!opportunity.estimatorId) return { notified: 0, recipients: [] };
+
+    const summary = String(payload?.summary ?? "").trim().slice(0, 2000) || "The lead details were updated.";
+    await opportunity.update({ leadChangeSummary: summary, leadEditedAt: new Date(), leadChangeAcknowledgedAt: null });
+
+    const { recipients } = await notify({
+        event: "lead.changed",
+        title: `${opportunity.number}: lead details changed`,
+        body: `${actor?.name || "Sales"} updated ${customerOf(opportunity)} after handover — ${summary}`,
+        userIds: [opportunity.estimatorId],
+        opportunity,
+        actor,
+    });
+    await recordSystemEvent(opportunity, "Estimator told the lead details changed", actor);
+    return { notified: recipients.length, recipients };
+};

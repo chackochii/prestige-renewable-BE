@@ -1,6 +1,7 @@
-// Watches for records whose stage SLA has run out and tells whoever is
-// assigned to them. Nothing else in the app runs on a timer, so this is a
-// plain interval started by server.js rather than a job queue.
+// Watches for work that has run past its date and tells whoever owns it:
+// records whose stage SLA has run out, and collaboration requests past their
+// due date. Nothing else in the app runs on a timer, so this is a plain
+// interval started by server.js rather than a job queue.
 //
 // It re-checks every few minutes and would otherwise raise the same notice
 // over and over; the dedupe key ("sla:<record>:<due date>") makes it once per
@@ -11,6 +12,7 @@ import db from "../../../models/index.js";
 import logger from "../../../utils/logger.js";
 import { notify } from "./notificationService.js";
 import { assignedUserIds, customerLabel } from "../../opportunity/service/opportunityPeople.js";
+import { overdueRequests } from "../../collaboration/service/collaborationService.js";
 
 const { Opportunity } = db;
 
@@ -52,6 +54,27 @@ export const runSlaCheck = async () => {
     return raised;
 };
 
+/** One pass over collaboration requests that are open and past their due date. */
+export const runOverdueRequestCheck = async () => {
+    const since = new Date(Date.now() - LOOK_BACK_DAYS * 86400000);
+    const overdue = await overdueRequests(since);
+
+    let raised = 0;
+    for (const request of overdue) {
+        const due = new Date(request.dueAt);
+        const { created } = await notify({
+            event: "request.overdue",
+            title: `${request.kind === "assignment" ? "ASG" : "REQ"}-${request.id} is past its due date`,
+            body: `"${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""} was due ${due.toISOString().slice(0, 10)}.`,
+            userIds: [request.assigneeId],
+            businessUnitId: request.businessUnitId,
+            dedupeKey: `request-overdue:${request.id}:${due.toISOString()}`,
+        });
+        raised += created;
+    }
+    return raised;
+};
+
 /**
  * Starts the periodic check. SLA_CHECK_INTERVAL_MINUTES=0 turns it off (tests,
  * one-off scripts). Returns a stop function.
@@ -69,7 +92,7 @@ export const startSlaWatcher = () => {
         if (running) return;
         running = true;
         try {
-            const raised = await runSlaCheck();
+            const raised = (await runSlaCheck()) + (await runOverdueRequestCheck());
             if (raised) logger.info(`SLA watcher: ${raised} overdue notification(s) raised`);
         } catch (err) {
             logger.error(`SLA watcher failed: ${err.stack ?? err.message}`);

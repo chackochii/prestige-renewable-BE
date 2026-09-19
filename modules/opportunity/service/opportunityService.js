@@ -10,6 +10,7 @@ import { isEstimationReady } from "./estimationService.js";
 import { quoteHasItems } from "./quoteService.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
+import { sanitizeEstimationInput } from "./estimationInput.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -38,10 +39,30 @@ const LEAD_FIELDS = [
     "hasOwnerDiscount", "ownerDiscountName", "ownerDiscountAmount",
     "needsClientVisit", "clientVisitReason", "customFields", "notPotentialReason",
     "estimatorId", "salespersonId", "notes",
+    // Lead checklist — what sales confirms with the customer before handover.
+    "customerFirstName", "customerLastName", "preferredLanguage", "billingSameAsSite",
+    "customerComments", "customerIntentConfirmed", "customerBudget", "businessOffers",
+    "serviceRequirement", "propertyStoreys", "roofType", "electricalPhase",
+    "financeAssistance", "financeNotes", "siteRequirementsNone", "siteSpecificRequirements",
+    "preferredInstallTimeframe", "preferredInstallLocation",
+    // The optional rows, merged rather than replaced (see mergeEstimationInput).
+    "estimationInput",
 ];
-const BOOLEAN_FIELDS = ["energyHasBills", "needsClientContact", "hasOwnerDiscount", "needsClientVisit"];
-const NUMERIC_FIELDS = ["energyAnnualKwh", "estimatedValue", "ownerDiscountAmount"];
-const MAX_LENGTH = { siteMapUrl: 1000, leadSourceDetails: 500, customerAbn: 20, siteState: 10, sitePostcode: 10, siteJurisdiction: 10 };
+const BOOLEAN_FIELDS = [
+    "energyHasBills", "needsClientContact", "hasOwnerDiscount", "needsClientVisit",
+    "customerIntentConfirmed", "siteRequirementsNone",
+];
+const NUMERIC_FIELDS = ["energyAnnualKwh", "estimatedValue", "ownerDiscountAmount", "customerBudget"];
+// Every field the model validates with isIn — see modules/opportunity/model/opportunity.js.
+const CHOICE_FIELDS = [
+    "leadType", "involvementTier", "billingSameAsSite", "serviceRequirement", "propertyStoreys",
+    "roofType", "electricalPhase", "financeAssistance", "preferredInstallTimeframe",
+];
+const MAX_LENGTH = {
+    siteMapUrl: 1000, leadSourceDetails: 500, customerAbn: 20, siteState: 10, sitePostcode: 10,
+    siteJurisdiction: 10, customerFirstName: 100, customerLastName: 100, preferredLanguage: 40,
+    preferredInstallLocation: 255,
+};
 
 const toBool = (value) => value === true || value === 1 || value === "true" || value === "1";
 const text = (value, max) => String(value ?? "").trim().slice(0, max);
@@ -76,7 +97,10 @@ const pickLeadFields = (payload) => {
     const picked = {};
     for (const field of LEAD_FIELDS) if (payload[field] !== undefined) picked[field] = payload[field];
     for (const field of BOOLEAN_FIELDS) if (picked[field] !== undefined) picked[field] = toBool(picked[field]);
-    if (picked.leadType === "") picked.leadType = null; // model validates the value otherwise
+    // Choice fields the model checks against a fixed list. A row the customer
+    // has not answered yet arrives as "" from the form, which is "not set",
+    // not an invalid choice — store it as null so the validator skips it.
+    for (const field of CHOICE_FIELDS) if (picked[field] === "") picked[field] = null;
     for (const numeric of NUMERIC_FIELDS) {
         if (picked[numeric] === "" || picked[numeric] === null) picked[numeric] = null;
         else if (picked[numeric] !== undefined && !Number.isFinite(Number(picked[numeric])))
@@ -87,6 +111,7 @@ const pickLeadFields = (payload) => {
             throw httpError(400, `${field} is too long (${max} characters max)`);
     if (picked.contactAttempts !== undefined) picked.contactAttempts = sanitizeContactAttempts(picked.contactAttempts);
     if (picked.customFields !== undefined) picked.customFields = sanitizeCustomFields(picked.customFields);
+    if (picked.estimationInput !== undefined) picked.estimationInput = sanitizeEstimationInput(picked.estimationInput);
     if (picked.hasOwnerDiscount === false) {
         picked.ownerDiscountName = null;
         picked.ownerDiscountAmount = null;
@@ -230,16 +255,37 @@ const isBlank = (value) => value === undefined || value === null || String(value
  * What the checklist still needs. `billDocument` = an energy bill is on file;
  * `skipBills` for brand-new records whose bills are uploaded right after.
  */
+/**
+ * The lead checklist: everything sales must have confirmed with the customer
+ * before the lead becomes a potential client. Mirrors the rows the lead form
+ * shows (prestige-fe/src/helpers/leadChecklist.js) so the two cannot disagree
+ * about what "complete" means.
+ */
 export const qualificationChecklistItems = (o, { billDocument = false, skipBills = false } = {}) => {
     const missing = [];
     if (o.needsClientContact && !(Array.isArray(o.contactAttempts) ? o.contactAttempts : []).length)
         missing.push("a logged contact attempt");
     if (isBlank(o.leadType)) missing.push("lead type");
+    if (isBlank(o.customerFirstName) || isBlank(o.customerLastName)) missing.push("customer first and last name");
     if (isBlank(o.siteLine1) || isBlank(o.siteSuburb) || isBlank(o.sitePostcode)) missing.push("site address");
     if (isBlank(o.customerEmail)) missing.push("customer email");
     if (isBlank(o.customerPhone)) missing.push("customer phone");
+    if (isBlank(o.serviceRequirement)) missing.push("service requirement (solar, battery or both)");
+    if (isBlank(o.billingSameAsSite)) missing.push("billing address confirmation");
+    else if (o.billingSameAsSite === "no" && isBlank(o.customerBillingAddress)) missing.push("billing address");
+    if (isBlank(o.propertyStoreys)) missing.push("house type");
+    if (isBlank(o.roofType)) missing.push("roof type");
+    if (isBlank(o.electricalPhase)) missing.push("electrical phase");
     if (!skipBills && !o.energyHasBills && !billDocument) missing.push("electricity bills");
     if (isBlank(o.energyAnnualKwh)) missing.push("annual usage");
+    if (isBlank(o.financeAssistance)) missing.push("finance assistance");
+    else if (o.financeAssistance === "yes" && isBlank(o.financeNotes)) missing.push("what finance assistance is needed");
+    if (!o.siteRequirementsNone && isBlank(o.siteSpecificRequirements))
+        missing.push("site-specific requirements (or none identified)");
+    if (isBlank(o.preferredInstallTimeframe)) missing.push("preferred installation timeframe");
+    if (isBlank(o.preferredInstallLocation)) missing.push("preferred installation location");
+    if (!o.customerIntentConfirmed) missing.push("confirmation the customer is genuinely interested");
+    if (isBlank(o.customerComments)) missing.push("initial requirements and comments");
     if (isBlank(o.leadSource) || (MANUAL_LEAD_SOURCES.includes(o.leadSource) && isBlank(o.leadSourceDetails)))
         missing.push("lead source details");
     return missing;
@@ -319,6 +365,17 @@ export const updateLead = async (id, payload = {}, actor) => {
         fields.salespersonId = await assertUserExists(fields.salespersonId, "salesperson");
     if (payload.lifecycle !== undefined) fields.lifecycle = payload.lifecycle; // model validates the value
     const lifecycleWas = opportunity.lifecycle;
+
+    // The optional checklist rows are merged, never replaced: sales and the
+    // estimator both write into the same object and must not wipe each other.
+    if (fields.estimationInput !== undefined)
+        fields.estimationInput = { ...(opportunity.estimationInput || {}), ...fields.estimationInput };
+
+    // A lead edited after it was handed over leaves a mark the estimator's
+    // screen picks up (cleared by estimation/acknowledge-lead-change).
+    const handedOver = Number(opportunity.stage) > 1 || Boolean(opportunity.estimatorId);
+    const touchesLead = Object.keys(fields).some((field) => field !== "lifecycle");
+    if (handedOver && touchesLead) fields.leadEditedAt = new Date();
 
     await opportunity.update(fields);
 

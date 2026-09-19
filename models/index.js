@@ -32,6 +32,10 @@ import defineDocument from "../modules/document/model/document.js";
 import defineAuditLog from "../modules/audit/model/auditLog.js";
 import defineNotification from "../modules/notification/model/notification.js";
 import defineCampaign from "../modules/campaign/model/campaign.js";
+import defineCollaborationRequest from "../modules/collaboration/model/collaborationRequest.js";
+import defineCollaborationProgress from "../modules/collaboration/model/collaborationProgress.js";
+import defineCollaborationAttachment from "../modules/collaboration/model/collaborationAttachment.js";
+import defineCollaborationEvent from "../modules/collaboration/model/collaborationEvent.js";
 
 const db = { sequelize };
 
@@ -75,6 +79,12 @@ db.Document = defineDocument(sequelize, DataTypes);
 db.AuditLog = defineAuditLog(sequelize, DataTypes);
 db.Notification = defineNotification(sequelize, DataTypes);
 
+// Cross-department requests and assignments
+db.CollaborationRequest = defineCollaborationRequest(sequelize, DataTypes);
+db.CollaborationProgress = defineCollaborationProgress(sequelize, DataTypes);
+db.CollaborationAttachment = defineCollaborationAttachment(sequelize, DataTypes);
+db.CollaborationEvent = defineCollaborationEvent(sequelize, DataTypes);
+
 Object.values(db)
     .filter((model) => typeof model?.associate === "function")
     .forEach((model) => model.associate(db));
@@ -110,6 +120,10 @@ export const {
     Document,
     AuditLog,
     Notification,
+    CollaborationRequest,
+    CollaborationProgress,
+    CollaborationAttachment,
+    CollaborationEvent,
 } = db;
 
 export { sequelize };

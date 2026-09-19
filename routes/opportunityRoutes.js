@@ -26,6 +26,10 @@ import {
     estimationRequirements,
     estimationClientInfo,
     estimationChecklist,
+    estimationCollectedInputs,
+    estimationAcceptInputs,
+    estimationAcknowledgeLeadChange,
+    notifyEstimatorOfChange,
     getQuote,
     createQuote,
     updateQuote,
@@ -36,6 +40,7 @@ import {
     updateQuoteCost,
     deleteQuoteCost,
 } from "../modules/opportunity/controller/opportunityController.js";
+import * as collaboration from "../modules/collaboration/controller/collaborationController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -105,13 +110,28 @@ router.post("/:id/assign-estimator", write, setEstimator); // { estimatorId }
 router.post("/:id/assign-coordinator", requireAnyPermission("leads.update", "estimation.update"), setCoordinator); // { operationalCoordinatorId }
 // In-app notifications.
 router.post("/:id/notify-owner", write, notifyOwner); // Business Owner(s): new lead
+router.post("/:id/notify-estimator", write, notifyEstimatorOfChange); // { summary? } — lead pack changed after handover
 router.post("/:id/notify-sales-manager", estimate, notifySales); // Sales manager + salesperson: estimation on hold
 router.post("/:id/notify-operations-coordinator", estimate, notifyOpsCoordinator); // Ops coordinator: site visit needed
 
 // Estimation workflow (stage 2) — each returns the refreshed opportunity.
 router.post("/:id/estimation/requirements", estimate, estimationRequirements); // { received, checklistKeys?, reason? }
 router.post("/:id/estimation/client-info", estimate, estimationClientInfo); // { needed }
-router.post("/:id/estimation/checklist", estimate, estimationChecklist); // { checklistValues, preSiteInspectionRequired, siteVisitAssigneeId?, siteVisitCompleted? }
+router.post("/:id/estimation/checklist", estimate, estimationChecklist);
+// The optional lead-checklist rows: estimation collects what sales left blank
+// and confirms the pack is enough to price.
+router.post("/:id/estimation/collected-inputs", estimate, estimationCollectedInputs); // { input }
+router.post("/:id/estimation/accept-inputs", estimate, estimationAcceptInputs);
+router.post("/:id/estimation/acknowledge-lead-change", estimate, estimationAcknowledgeLeadChange); // clears the "lead details changed" notice
+
+// Cross-department requests and assignments raised from a stage of this
+// record. Everything afterwards (responding, deciding, progress, files) lives
+// under /api/collaboration/requests/:id — see routes/collaborationRoutes.js.
+// Raising one needs read on the record, not update: asking another team for
+// something is not an edit, and the teams that most often need to ask hold
+// read only. The service records who raised it and audits every step.
+router.get("/:id/collaboration/requests", readAny, collaboration.getForOpportunity);
+router.post("/:id/collaboration/requests", readAny, collaboration.create); // { kind, department, assigneeId, title, ... }
 
 // Quote builder — one quote per opportunity, nested items and costs.
 router.get("/:id/quote", readAny, getQuote); // → quote or null

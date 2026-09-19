@@ -198,6 +198,52 @@ Notes:
 - **Files** live in a private DigitalOcean Space (`DO_SPACES_*`, see `utils/storage.js`) and are streamed back through the file route, never linked directly. Files saved to local disk by older versions can be moved into the Space with `npm run storage:copy-to-spaces` (reads `./uploads`). The MIME type is derived from the extension allowlist, never from the upload; non-image/PDF types are always served as downloads with `nosniff`. Attachment `url`s carry a **download-only token** (2 h, bound to that document, `DOWNLOAD_TOKEN_EXPIRES_IN`) so `<img>`/links work without exposing a session token; the route also accepts a normal bearer token.
 - **Assignments** must be active users of the record's business unit (ADM anywhere), each writes a `system` history entry and notifies the person now assigned (see below).
 
+## The lead checklist
+
+What sales confirms with the customer before a lead becomes a potential client. The **17 mandatory rows** are columns on `opportunities` — contact, customer name, phone and email, site address, service requirement, billing address, house type, roof type, electrical phase, bills, annual usage, finance assistance, site-specific requirements, preferred timeframe and location, genuine-interest confirmation, initial comments and where they got our details. `qualificationChecklistItems` gates on all of them: `PATCH /api/opportunities/:id` with `qualification: "qualified"` answers **400** naming what is still missing, so the API and the lead form cannot disagree about what "complete" means.
+
+The **optional rows** — everything estimation needs but sales does not have to collect — travel in `estimation_input`, one JSONB object whose keys are listed in `ESTIMATION_INPUT_KEYS` (roof measurements, switchboard condition, panel and inverter specifics, permits, VPP, inclusions and exclusions). Unknown keys are dropped on write, and every write merges rather than replaces, because sales and the estimator both fill parts of the same object.
+
+| Method | Route | Permission | Body → returns |
+|---|---|---|---|
+| `POST` | `/api/opportunities/:id/estimation/collected-inputs` | `estimation.update` | `{ input }` — a partial `estimationInput`, merged in → refreshed opportunity |
+| `POST` | `/api/opportunities/:id/estimation/accept-inputs` | `estimation.update` | the estimator confirming the pack is enough to price (idempotent); tells the salesperson |
+| `POST` | `/api/opportunities/:id/estimation/acknowledge-lead-change` | `estimation.update` | clears the "lead details changed" notice |
+| `POST` | `/api/opportunities/:id/notify-estimator` | `leads.update` | `{ summary? }` — tells the assigned estimator the lead pack changed under them |
+
+Editing a lead that has already been handed over (stage 2+, or an estimator assigned) stamps `lead_edited_at`; `notify-estimator` records the summary and raises the notice, and the estimator clears it with `acknowledge-lead-change`.
+
+## Collaboration: cross-department requests and assignments
+
+Raised from a stage when the next step belongs to another team. Two kinds, because they behave differently:
+
+- **information** — "Sales, we're missing the client's usage data." Answered once on a form built from the fields the requester asked for (`requestedFields`), then accepted or sent back for clarification. The response lives on the request row; a draft is private to the assignee until submitted.
+- **assignment** — "Operations, we need a site visit." Worked over time: assigned → scheduled → in progress → completed → report submitted, each step a `collaboration_progress` row. An entry marked `internal` stays inside the assignee's department and is stripped for everyone else.
+
+Files supplied against a request live in the Space like any other document (`collaboration_attachments`); `attachment` answers one of the requested documents, `report` is what the requester waits on at the end. The requester can copy one onto the job itself, where it lands in the record's own attachments.
+
+| Method | Route | Permission | Body → returns |
+|---|---|---|---|
+| `GET` | `/api/opportunities/:id/collaboration/requests` | `leads.read` or `estimation.read` | everything raised against the job |
+| `POST` | `/api/opportunities/:id/collaboration/requests` | `leads.read` or `estimation.read` | `{ kind, department, assigneeId, stage?, title, description?, priority?, dueAt?, requestedFields?, requestedDocuments? }` → the request |
+| `GET` | `/api/collaboration/requests` | read | `?businessUnitId=&scope=assigned\|raised\|all&kind=&department=&status=&overdue=&page=&pageSize=` |
+| `GET` | `/api/collaboration/requests/:id` | read | the request with its response, progress, attachments |
+| `GET` | `/api/collaboration/requests/:id/history` | read | `[{ id, action, detail, byName, at }]` |
+| `PATCH` | `/api/collaboration/requests/:id` | read (requester) | `{ title?, description?, priority?, dueAt?, assigneeId? }` |
+| `POST` | `/api/collaboration/requests/:id/response` | read (assignee) | `{ fields, note?, draft? }` |
+| `POST` | `/api/collaboration/requests/:id/decision` | read (requester) | `{ outcome: accepted \| clarification_required \| returned, note? }` |
+| `POST` | `/api/collaboration/requests/:id/progress` | read (assignee) | `{ status, note?, scheduledFor?, internal? }` |
+| `POST` | `/api/collaboration/requests/:id/cancel` | read (requester) | `{ reason }` |
+| `POST` | `/api/collaboration/requests/:id/attachments` | read (either party) | multipart `file` + `category` (`attachment` \| `report`) + `documentKey?` → `{ request, attachment }` |
+| `POST` | `/api/collaboration/requests/:id/attachments/file-on-job` | `leads.update` or `estimation.update` | `{ attachmentId, category }` — copies the file into the job's attachments |
+| `GET` | `/api/collaboration/requests/:id/attachments/:attachmentId/file` | read | the file; accepts a download-scoped token in `?token=` |
+
+Notes:
+
+- **Permissions gate the door, not the desk.** Every route asks only for `leads.read` / `estimation.read` in the record's unit; what a person may *do* is decided per request in the service — the assignee responds and reports progress, the requester edits, decides and cancels. Asking for `leads.update` would lock out operations and procurement, who hold read on the record and are exactly who this module hands work to.
+- **Unit scoping** is deny-by-default as everywhere else: a request outside the caller's business units answers 404, and a `businessUnitId` outside them answers 403.
+- **Every step is audited** in `collaboration_events` (the history tab) and notifies whoever is now waiting — see the events below.
+
 ## Notifications
 
 Every in-app notice goes through one function — `notify()` in `modules/notification/service/notificationService.js`. Give it an event key, a title and who to tell (named user ids and/or every holder of a role in the unit); it resolves the priority, writes the rows and pushes them to any browser the recipients have open. The person who caused the event is never notified of their own action unless the caller passes `includeActor`.
@@ -216,11 +262,11 @@ await notify({
 
 **Priority** is `high`, `medium` or `low`, resolved in that order: what the caller passed → the unit's override (`business_units.notification_priorities`, edited on Admin → Unit settings) → the event's default in `modules/notification/service/notificationEvents.js`. Adding an event to that file is all a new notification needs; both the settings screen and the frontend read the list from `GET /api/notifications/events`.
 
-**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, plus the three existing role notices (new lead, estimation on hold, site visit needed).
+**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, the three role notices (new lead, estimation on hold, site visit needed), and the collaboration ones — `request.created`, `request.response.submitted`, `request.clarification.requested`, `request.response.accepted`, `request.cancelled`, `request.overdue`, `assignment.schedule.changed`, `assignment.progressed`, `assignment.completed`, `assignment.report.submitted`.
 
 **Live delivery** is Server-Sent Events, not WebSocket — the traffic only goes one way, so the browser's own `EventSource` handles reconnection and no protocol upgrade is needed. Open connections are held in memory per process, so a multi-instance deploy needs `publish()` moved onto a shared bus (Redis pub/sub); nothing else changes.
 
-**SLA alerts** come from a plain interval started in `server.js` (`SLA_CHECK_INTERVAL_MINUTES`, 0 disables). It re-checks every few minutes; `dedupe_key` (unique with `user_id`) makes each deadline notify a person once, which also keeps it safe if two instances run it.
+**SLA alerts** come from a plain interval started in `server.js` (`SLA_CHECK_INTERVAL_MINUTES`, 0 disables). Each pass covers records past their stage SLA and collaboration requests past their due date, skipping anything already closed. `dedupe_key` (unique with `user_id`) makes each deadline notify a person once, which also keeps it safe if two instances run it.
 
 | Method | Route | Body → returns |
 |---|---|---|

@@ -17,6 +17,20 @@ export const NOTIFICATION_EVENTS = {
     "lead.captured": { label: "New lead captured", priority: "medium" },
     "estimation.on_hold": { label: "Estimation sent back to sales", priority: "high" },
     "estimation.site_visit": { label: "Pre-site inspection needed", priority: "medium" },
+    "lead.changed": { label: "Lead details changed after handover", priority: "high" },
+    "estimation.inputs.accepted": { label: "Estimation accepted the lead inputs", priority: "medium" },
+
+    // Cross-department requests and assignments (modules/collaboration).
+    "request.created": { label: "Request or assignment for you", priority: "high" },
+    "request.response.submitted": { label: "Response to your request", priority: "high" },
+    "request.clarification.requested": { label: "Clarification needed on your response", priority: "high" },
+    "request.response.accepted": { label: "Your response was accepted", priority: "low" },
+    "request.cancelled": { label: "Request cancelled", priority: "low" },
+    "request.overdue": { label: "Request past its due date", priority: "high" },
+    "assignment.schedule.changed": { label: "Assignment scheduled or moved", priority: "medium" },
+    "assignment.progressed": { label: "Assignment progressed", priority: "low" },
+    "assignment.completed": { label: "Assignment completed", priority: "medium" },
+    "assignment.report.submitted": { label: "Assignment report submitted", priority: "high" },
 };
 
 export const EVENT_KEYS = Object.keys(NOTIFICATION_EVENTS);
