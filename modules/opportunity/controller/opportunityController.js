@@ -244,6 +244,18 @@ export const estimationChecklist = asyncHandler(async (req, res) => {
 
 // ---- Quote ------------------------------------------------------------------
 
+// ---- Saved quote versions ---------------------------------------------------
+
+export const getQuoteVersions = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await quotes.listVersions(req.params.id) });
+});
+
+export const createQuoteVersion = asyncHandler(async (req, res) => {
+    const version = await quotes.createVersion(req.params.id, req.body, req.user);
+
+    successResponse(res, { data: version }, 201);
+});
+
 export const getQuote = asyncHandler(async (req, res) => {
     const quote = await quotes.getQuote(req.params.id);
 

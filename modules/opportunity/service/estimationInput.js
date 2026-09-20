@@ -8,6 +8,10 @@ import { ESTIMATION_INPUT_KEYS } from "../model/opportunity.js";
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const toBool = (value) => value === true || value === 1 || value === "true" || value === "1";
 
+// The tick-box rows. "…OnFile" means the estimator confirmed the files exist
+// elsewhere, which satisfies the row exactly as an upload does.
+const BOOLEAN_INPUT_KEYS = ["siteVisitCompleted", "vppDiscussed", "sitePhotosOnFile", "drawingsOnFile"];
+
 /**
  * Only known keys survive; `permits` stays a list, the two flags stay
  * booleans, everything else is a capped string. Anything the client invents
@@ -21,7 +25,7 @@ export const sanitizeEstimationInput = (value) => {
         const given = value[key];
         if (given === undefined) continue;
         if (key === "permits") clean[key] = (Array.isArray(given) ? given : []).map((p) => String(p).slice(0, 40));
-        else if (key === "siteVisitCompleted" || key === "vppDiscussed") clean[key] = toBool(given);
+        else if (BOOLEAN_INPUT_KEYS.includes(key)) clean[key] = toBool(given);
         else clean[key] = String(given ?? "").slice(0, 5000);
     }
     return clean;

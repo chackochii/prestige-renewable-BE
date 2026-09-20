@@ -35,9 +35,14 @@ const asBoolean = (value, field, { nullable = false } = {}) => {
 
 const text = (value, max) => String(value ?? "").trim().slice(0, max);
 
-/** True once sales' requirements are confirmed and no further client input is pending. */
-export const isEstimationReady = (opportunity) =>
-    opportunity.estimationRequirementsReceived === true && opportunity.estimationClientInfoNeeded === false;
+/**
+ * True once no further client input is pending. The separate "did sales hand
+ * over the requirements" gate was dropped from the screens (Sep 2026) — what
+ * sales collected is now the lead checklist itself, which the estimator reads
+ * rather than signs off — so readiness rests on the client-input answer alone.
+ * Mirrors prestige-fe/src/helpers/stageTransition.js#estimationState.
+ */
+export const isEstimationReady = (opportunity) => opportunity.estimationClientInfoNeeded === false;
 
 /**
  * { received: boolean, checklistKeys?: string[], reason?: string }
@@ -71,8 +76,8 @@ export const submitRequirements = async (id, payload = {}, actor) => {
 /** { needed: boolean } — whether the client must supply more input before estimating. */
 export const submitClientInfo = async (id, payload = {}, actor) => {
     const opportunity = await loadOpportunity(id);
-    if (opportunity.estimationRequirementsReceived !== true)
-        throw httpError(400, "Confirm the requirements from sales before answering the client-input question");
+    // No "requirements received" step in front of this any more: the estimator
+    // reads the lead checklist itself and answers this question directly.
     const needed = asBoolean(payload.needed, "needed");
     const changed = opportunity.estimationClientInfoNeeded !== needed;
     await opportunity.update({ estimationClientInfoNeeded: needed });

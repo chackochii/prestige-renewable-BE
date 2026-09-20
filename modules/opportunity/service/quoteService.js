@@ -6,7 +6,7 @@ import { parseId } from "../../../utils/ids.js";
 import { PROJECT_TYPES, TAX_TREATMENTS } from "../model/quote.js";
 import { COST_CALC_TYPES } from "../model/quoteCost.js";
 
-const { Opportunity, Quote, QuoteItem, QuoteCost, CatalogItem, User } = db;
+const { Opportunity, Quote, QuoteItem, QuoteCost, QuoteVersion, CatalogItem, User, sequelize } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -265,4 +265,67 @@ export const removeCost = async (id, costId) => {
     const row = await QuoteCost.findOne({ where: { id: parseId(costId, "cost id"), quoteId: quote.id } });
     if (!row) throw httpError(404, "Quote cost not found");
     await row.destroy();
+};
+
+// ---- Saved versions ---------------------------------------------------------
+// A version is the quote frozen at the moment it was issued. The client sends
+// the snapshot it rendered (see prestige-fe/src/helpers/invoice.js), the server
+// owns the version number so two people saving at once cannot collide.
+
+const presentVersion = (row) => ({
+    id: row.id,
+    version: row.version,
+    quoteNumber: row.quoteNumber,
+    invoiceNumber: row.invoiceNumber,
+    grandTotal: row.grandTotal === null ? null : Number(row.grandTotal),
+    snapshot: row.snapshot ?? null,
+    createdAt: row.createdAt,
+    createdByName: row.createdBy?.name ?? null,
+});
+
+/** Saved versions for this opportunity, newest first. */
+export const listVersions = async (id) => {
+    const opportunityId = parseId(id, "opportunity id");
+    const rows = await QuoteVersion.findAll({
+        where: { opportunityId },
+        include: [{ model: User, as: "createdBy", attributes: ["id", "name"] }],
+        order: [["version", "DESC"], ["id", "DESC"]],
+    });
+    return rows.map(presentVersion);
+};
+
+/** { quoteNumber?, version?, grandTotal?, snapshot } — version is a hint only. */
+export const createVersion = async (id, payload = {}, actor) => {
+    const opportunity = await loadOpportunity(id);
+    if (!opportunity) throw httpError(404, "Opportunity not found");
+    const quote = await findQuote(opportunity.id);
+    if (!quote) throw httpError(400, "Create the quote before saving a version");
+    if (!quote.items?.length) throw httpError(400, "Add at least one item before saving a version");
+
+    const snapshot = payload.snapshot;
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot))
+        throw httpError(400, "snapshot is required");
+
+    // Numbering is the server's: whatever the client guessed, the next version
+    // is one past the highest this quote already has.
+    const created = await sequelize.transaction(async (transaction) => {
+        const highest = await QuoteVersion.max("version", { where: { quoteId: quote.id }, transaction });
+        return QuoteVersion.create(
+            {
+                quoteId: quote.id,
+                opportunityId: opportunity.id,
+                version: (Number.isFinite(highest) ? highest : 0) + 1,
+                quoteNumber: text(payload.quoteNumber || quote.quoteNumber, 40) || null,
+                grandTotal: num(payload.grandTotal ?? snapshot.grandTotal),
+                snapshot,
+                createdById: actor?.id ?? null,
+            },
+            { transaction }
+        );
+    });
+
+    const row = await QuoteVersion.findByPk(created.id, {
+        include: [{ model: User, as: "createdBy", attributes: ["id", "name"] }],
+    });
+    return presentVersion(row);
 };

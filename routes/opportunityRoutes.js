@@ -31,6 +31,8 @@ import {
     estimationAcknowledgeLeadChange,
     notifyEstimatorOfChange,
     getQuote,
+    getQuoteVersions,
+    createQuoteVersion,
     createQuote,
     updateQuote,
     addQuoteItem,
@@ -133,7 +135,11 @@ router.post("/:id/estimation/acknowledge-lead-change", estimate, estimationAckno
 router.get("/:id/collaboration/requests", readAny, collaboration.getForOpportunity);
 router.post("/:id/collaboration/requests", readAny, collaboration.create); // { kind, department, assigneeId, title, ... }
 
-// Quote builder — one quote per opportunity, nested items and costs.
+// Quote builder — one quote per opportunity, nested items and costs, plus the
+// versions saved from it: each a frozen snapshot of the quote as issued.
+router.get("/:id/quote/versions", readAny, getQuoteVersions);
+router.post("/:id/quote/versions", estimate, createQuoteVersion); // { snapshot, quoteNumber?, grandTotal? } → the version
+
 router.get("/:id/quote", readAny, getQuote); // → quote or null
 router.post("/:id/quote", estimate, createQuote); // → quote (idempotent)
 router.patch("/:id/quote", estimate, updateQuote); // { project?, projectType?, projectTypeOther?, quoteDate?, taxTreatment?, gstRatePct? }

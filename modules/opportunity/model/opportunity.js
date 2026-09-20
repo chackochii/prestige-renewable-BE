@@ -19,7 +19,7 @@ export const INSTALL_TIMEFRAMES = ["asap", "1_3_months", "3_6_months", "6_months
 export const ESTIMATION_INPUT_KEYS = [
     // Project & site
     "siteType", "preSiteInspectionRequired", "siteCrewAssigneeId", "inspectionStatus",
-    "siteVisitCompleted", "roofMeasurements",
+    "siteVisitCompleted", "sitePhotosOnFile", "roofMeasurements",
     // Existing electrical
     "existingElectrical", "switchboardLocation", "switchboardCondition", "switchboardUpgrade",
     "loadRequirements",
@@ -32,7 +32,7 @@ export const ESTIMATION_INPUT_KEYS = [
     "mountingRequirements", "cableRequirements", "siteConstraints", "specialRequirements",
     // Compliance
     "permits", "vppDiscussed", "vppEligibility", "vppNotes", "permitNotes", "meterRequirements",
-    "drawingsNotes",
+    "drawingsOnFile", "drawingsNotes",
     // Customer
     "inclusions", "exclusions", "noteForEstimator",
 ];
@@ -183,7 +183,9 @@ export default (sequelize, DataTypes) => {
             // What Estimation needs before a lead can be marked a potential
             // client — see opportunityService.qualificationChecklistItems.
             siteMapUrl: { type: DataTypes.STRING(1000) },
-            needsClientContact: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            // null = nobody has answered "did the client have to be contacted?"
+            // yet; the lead checklist asks for an answer before handover.
+            needsClientContact: { type: DataTypes.BOOLEAN, allowNull: true },
             contactAttempts: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] }, // [{ method, contactedAt, reached, reason }]
             hasOwnerDiscount: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
             ownerDiscountName: { type: DataTypes.STRING },

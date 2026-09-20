@@ -49,9 +49,12 @@ const LEAD_FIELDS = [
     "estimationInput",
 ];
 const BOOLEAN_FIELDS = [
-    "energyHasBills", "needsClientContact", "hasOwnerDiscount", "needsClientVisit",
+    "energyHasBills", "hasOwnerDiscount", "needsClientVisit",
     "customerIntentConfirmed", "siteRequirementsNone",
 ];
+// Yes/no questions that can also be unanswered: null stays null rather than
+// collapsing into "no", so the checklist can tell the two apart.
+const NULLABLE_BOOLEAN_FIELDS = ["needsClientContact"];
 const NUMERIC_FIELDS = ["energyAnnualKwh", "estimatedValue", "ownerDiscountAmount", "customerBudget"];
 // Every field the model validates with isIn — see modules/opportunity/model/opportunity.js.
 const CHOICE_FIELDS = [
@@ -97,6 +100,9 @@ const pickLeadFields = (payload) => {
     const picked = {};
     for (const field of LEAD_FIELDS) if (payload[field] !== undefined) picked[field] = payload[field];
     for (const field of BOOLEAN_FIELDS) if (picked[field] !== undefined) picked[field] = toBool(picked[field]);
+    for (const field of NULLABLE_BOOLEAN_FIELDS)
+        if (picked[field] !== undefined)
+            picked[field] = picked[field] === null || picked[field] === "" ? null : toBool(picked[field]);
     // Choice fields the model checks against a fixed list. A row the customer
     // has not answered yet arrives as "" from the form, which is "not set",
     // not an invalid choice — store it as null so the validator skips it.
@@ -117,7 +123,8 @@ const pickLeadFields = (payload) => {
         picked.ownerDiscountAmount = null;
     }
     if (picked.needsClientVisit === false) picked.clientVisitReason = null;
-    if (picked.needsClientContact === false) picked.contactAttempts = [];
+    // Attempts only belong on a lead where the client did have to be chased.
+    if (picked.needsClientContact !== undefined && picked.needsClientContact !== true) picked.contactAttempts = [];
     return picked;
 };
 
@@ -263,7 +270,9 @@ const isBlank = (value) => value === undefined || value === null || String(value
  */
 export const qualificationChecklistItems = (o, { billDocument = false, skipBills = false } = {}) => {
     const missing = [];
-    if (o.needsClientContact && !(Array.isArray(o.contactAttempts) ? o.contactAttempts : []).length)
+    if (o.needsClientContact === null || o.needsClientContact === undefined)
+        missing.push("whether the client had to be contacted");
+    else if (o.needsClientContact && !(Array.isArray(o.contactAttempts) ? o.contactAttempts : []).length)
         missing.push("a logged contact attempt");
     if (isBlank(o.leadType)) missing.push("lead type");
     if (isBlank(o.customerFirstName) || isBlank(o.customerLastName)) missing.push("customer first and last name");
@@ -414,7 +423,7 @@ export const advanceStage = async (id, actor) => {
     // outstanding, and a quote with at least one priced item.
     if (opportunity.stage === 2) {
         if (!isEstimationReady(opportunity))
-            throw httpError(400, "Complete estimation (requirements confirmed, client input resolved) before leaving this stage");
+            throw httpError(400, "Answer the client-input question before leaving estimation");
         if (!(await quoteHasItems(opportunity.id)))
             throw httpError(400, "Add at least one item to the quote before leaving estimation");
     }

@@ -18,6 +18,7 @@ import defineOpportunityHistory from "../modules/opportunity/model/opportunityHi
 import defineQuote from "../modules/opportunity/model/quote.js";
 import defineQuoteItem from "../modules/opportunity/model/quoteItem.js";
 import defineQuoteCost from "../modules/opportunity/model/quoteCost.js";
+import defineQuoteVersion from "../modules/opportunity/model/quoteVersion.js";
 import defineCatalogItem from "../modules/catalog/model/catalogItem.js";
 import defineEstimate from "../modules/opportunity/model/estimate.js";
 import defineEstimateOption from "../modules/opportunity/model/estimateOption.js";
@@ -55,6 +56,7 @@ db.OpportunityHistory = defineOpportunityHistory(sequelize, DataTypes);
 db.Quote = defineQuote(sequelize, DataTypes);
 db.QuoteItem = defineQuoteItem(sequelize, DataTypes);
 db.QuoteCost = defineQuoteCost(sequelize, DataTypes);
+db.QuoteVersion = defineQuoteVersion(sequelize, DataTypes);
 db.CatalogItem = defineCatalogItem(sequelize, DataTypes);
 
 // Lead ingestion (ad platforms & ServiceM8)
@@ -105,6 +107,7 @@ export const {
     Quote,
     QuoteItem,
     QuoteCost,
+    QuoteVersion,
     CatalogItem,
     IntegrationConnection,
     InboundLead,

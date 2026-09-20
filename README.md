@@ -200,7 +200,7 @@ Notes:
 
 ## The lead checklist
 
-What sales confirms with the customer before a lead becomes a potential client. The **17 mandatory rows** are columns on `opportunities` — contact, customer name, phone and email, site address, service requirement, billing address, house type, roof type, electrical phase, bills, annual usage, finance assistance, site-specific requirements, preferred timeframe and location, genuine-interest confirmation, initial comments and where they got our details. `qualificationChecklistItems` gates on all of them: `PATCH /api/opportunities/:id` with `qualification: "qualified"` answers **400** naming what is still missing, so the API and the lead form cannot disagree about what "complete" means.
+What sales confirms with the customer before a lead becomes a potential client. The **17 mandatory rows** are columns on `opportunities` — contact, customer name, phone and email, site address, service requirement, billing address, house type, roof type, electrical phase, bills, annual usage, finance assistance, site-specific requirements, preferred timeframe and location, genuine-interest confirmation, initial comments and where they got our details. "Did the client have to be contacted?" (`needsClientContact`) is three-state — `null` until somebody answers it, because an unanswered question is not a "no" — and the checklist asks for an answer before handover; `true` additionally needs a logged attempt. `qualificationChecklistItems` gates on all of them: `PATCH /api/opportunities/:id` with `qualification: "qualified"` answers **400** naming what is still missing, so the API and the lead form cannot disagree about what "complete" means.
 
 The **optional rows** — everything estimation needs but sales does not have to collect — travel in `estimation_input`, one JSONB object whose keys are listed in `ESTIMATION_INPUT_KEYS` (roof measurements, switchboard condition, panel and inverter specifics, permits, VPP, inclusions and exclusions). Unknown keys are dropped on write, and every write merges rather than replaces, because sales and the estimator both fill parts of the same object.
 
@@ -331,7 +331,9 @@ Only these fields are accepted. Everything else in the body is ignored, so a cal
 
 ## Estimation (stage 2) & quote builder API
 
-The estimator's workflow state lives on the opportunity (`estimation*` fields, returned by every opportunity endpoint) and each step is its own endpoint. Writes need `estimation.update`; reads accept `leads.read` or `estimation.read`. The advance gate for stage 2: requirements confirmed, client input resolved (`estimationClientInfoNeeded = false`) and a quote with at least one item.
+The estimator's workflow state lives on the opportunity (`estimation*` fields, returned by every opportunity endpoint) and each step is its own endpoint. Writes need `estimation.update`; reads accept `leads.read` or `estimation.read`. The advance gate for stage 2: client input resolved (`estimationClientInfoNeeded = false`) and a quote with at least one item.
+
+> The separate "did sales hand over the requirements" step was dropped from the screens in Sep 2026 — what sales collected *is* the lead checklist, which the estimator reads rather than signs off. `POST /estimation/requirements` still works for older callers, but nothing gates on `estimationRequirementsReceived` any more, and the client-input question can be answered straight away.
 
 | Method | Route | Body → returns |
 |---|---|---|
@@ -345,11 +347,15 @@ The estimator's workflow state lives on the opportunity (`estimation*` fields, r
 | `PATCH` | `/api/opportunities/:id/quote` | `{ project?, projectType?, projectTypeOther?, quoteDate?, taxTreatment? (exclusive\|inclusive\|no_gst), gstRatePct? }` → quote |
 | `POST` / `PATCH` / `DELETE` | `/api/opportunities/:id/quote/items[/:itemId]` | `{ itemKey, itemName, brand, unit, quantity, unitPrice, discountPct }` → item |
 | `POST` / `PATCH` / `DELETE` | `/api/opportunities/:id/quote/costs[/:costId]` | `{ costType, calcType (fixed\|percentage), value, description }` → cost |
+| `GET` | `/api/opportunities/:id/quote/versions` | saved versions, newest first: `{ id, version, quoteNumber, invoiceNumber, grandTotal, snapshot, createdAt, createdByName }` |
+| `POST` | `/api/opportunities/:id/quote/versions` | `{ snapshot, quoteNumber?, grandTotal? }` → the version |
+
+**Saved versions** freeze the quote as it stood when it was issued; the live quote carries on being edited. The client sends the snapshot it rendered (`prestige-fe/src/helpers/invoice.js#invoiceSnapshot`) and the PDF is rebuilt from it on view, so nothing else needs storing. The **server owns the version number** — one past the highest this quote already has, unique per quote — so two people saving at the same moment cannot land on the same one; any `version` in the body is ignored. A version needs a quote with at least one item.
 | `GET` | `/api/catalog` | any signed-in user → `[{ key, name, unit, brands: [{ name, unitPrice }] }]` (seeded by `npm run db:seed:catalog`, part of `npm run update`) |
 
 Quote totals and GST are derived by the client from items and costs; the API stores no totals. Every assignment, hold, confirmation and notification writes a `system` entry to the job history. `POST /:id/assign-coordinator` accepts `leads.update` **or** `estimation.update` because both screens use it.
 
-- **Qualification:** new leads default to `nurture`. Setting `qualification: "qualified"` (the "Potential client" decision) requires the checklist to be complete — lead type, site address, customer email + phone, electricity bills (flag or an uploaded bill), annual usage, lead source details, and a logged contact attempt when `needsClientContact` is set. `disqualified` requires `notPotentialReason`. Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
+- **Qualification:** new leads default to `nurture`. Setting `qualification: "qualified"` (the "Potential client" decision) requires the checklist to be complete — see "The lead checklist" above for all 17 rows. `disqualified` requires `notPotentialReason`. Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
 
 ## Project structure
 
