@@ -51,7 +51,7 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@123
 # PUBLIC_LEAD_UNIT_CODE=PRS
 
 # Notifications — how often to check for records past their SLA (0 disables)
-# SLA_CHECK_INTERVAL_MINUTES=15
+# SLA_CHECK_INTERVAL_MINUTES=1440
 
 # Uploaded documents — DigitalOcean Spaces (required; the server won't start without them)
 DO_SPACES_ENDPOINT=https://syd1.digitaloceanspaces.com
@@ -72,7 +72,7 @@ DO_SPACES_SECRET=
 | `SEED_SUPERADMIN_EMAIL` | no | Email of the seeded superadmin (default `superadmin@prestige.group`) |
 | `SEED_SUPERADMIN_PASSWORD` | no | Password of the seeded superadmin, stored bcrypt-hashed (default `ChangeMe@123`) |
 | `PUBLIC_LEAD_UNIT_CODE` | no | Business unit the public enquiry form files into when the request has no `businessUnit`; otherwise the first unit by code |
-| `SLA_CHECK_INTERVAL_MINUTES` | no (default 15) | How often to look for records past their stage SLA and notify whoever is assigned; `0` turns the check off |
+| `SLA_CHECK_INTERVAL_MINUTES` | no (default 1440 — once a day) | How often to look for records past their stage SLA and notify whoever is assigned; `0` turns the check off |
 | `STREAM_TOKEN_EXPIRES_IN` | no (default 12h) | Lifetime of the token that opens the notification stream |
 | `DO_SPACES_ENDPOINT` | yes | The Space's region endpoint, e.g. `https://syd1.digitaloceanspaces.com` (not the bucket URL) |
 | `DO_SPACES_BUCKET` | yes | Name of the Space uploaded documents are stored in |
@@ -266,7 +266,7 @@ await notify({
 
 **Live delivery** is Server-Sent Events, not WebSocket — the traffic only goes one way, so the browser's own `EventSource` handles reconnection and no protocol upgrade is needed. Open connections are held in memory per process, so a multi-instance deploy needs `publish()` moved onto a shared bus (Redis pub/sub); nothing else changes.
 
-**SLA alerts** come from a plain interval started in `server.js` (`SLA_CHECK_INTERVAL_MINUTES`, 0 disables). Each pass covers records past their stage SLA and collaboration requests past their due date, skipping anything already closed. `dedupe_key` (unique with `user_id`) makes each deadline notify a person once, which also keeps it safe if two instances run it.
+**SLA alerts** come from a plain interval started in `server.js` (`SLA_CHECK_INTERVAL_MINUTES`, 0 disables), running **once a day** by default — breaches are measured in days, so checking more often only repeats work the dedupe key discards. The first pass is one interval after startup, not at boot, so restarts (nodemon in development, deploys in production) don't re-check everything. Each pass covers records past their stage SLA and collaboration requests past their due date, skipping anything already closed. `dedupe_key` (unique with `user_id`) makes each deadline notify a person once, which also keeps it safe if two instances run it.
 
 | Method | Route | Body → returns |
 |---|---|---|

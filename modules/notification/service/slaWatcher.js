@@ -16,7 +16,21 @@ import { overdueRequests } from "../../collaboration/service/collaborationServic
 
 const { Opportunity } = db;
 
-const DEFAULT_INTERVAL_MINUTES = 15;
+// Once a day: SLA breaches and overdue requests are measured in days, so
+// checking more often only repeats work the dedupe key would discard anyway.
+const DEFAULT_INTERVAL_MINUTES = 24 * 60;
+
+const describeInterval = (minutes) => {
+    if (minutes % 1440 === 0) return `${minutes / 1440} day(s)`;
+    if (minutes % 60 === 0) return `${minutes / 60} hour(s)`;
+    return `${minutes} minute(s)`;
+};
+
+// Connection trouble rather than a fault in the check itself.
+const UNREACHABLE_CODES = ["ENOTFOUND", "ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH"];
+const isUnreachable = (err) =>
+    /^Sequelize(Connection|HostNotFound|ConnectionRefused|AccessDenied|InvalidConnection)/.test(err?.name ?? "") ||
+    UNREACHABLE_CODES.includes(err?.parent?.code ?? err?.original?.code ?? err?.code);
 // A record whose deadline passed long ago is history, not news: only look
 // back this far on the first pass after a restart.
 const LOOK_BACK_DAYS = 14;
@@ -95,7 +109,13 @@ export const startSlaWatcher = () => {
             const raised = (await runSlaCheck()) + (await runOverdueRequestCheck());
             if (raised) logger.info(`SLA watcher: ${raised} overdue notification(s) raised`);
         } catch (err) {
-            logger.error(`SLA watcher failed: ${err.stack ?? err.message}`);
+            // A laptop that slept, a dropped VPN, a database that is briefly
+            // unreachable: the next pass picks it up, so say so in one line
+            // rather than a stack every few minutes.
+            if (isUnreachable(err)) logger.warn(`SLA watcher skipped a pass — database unreachable (${err.parent?.code ?? err.name})`);
+            // Sequelize captures the stack before it sets the message, so the
+            // stack alone reads as a bare "Error" — say what went wrong first.
+            else logger.error(`SLA watcher failed: ${err.name}: ${err.message}\n${err.stack ?? ""}`);
         } finally {
             running = false;
         }
@@ -104,7 +124,9 @@ export const startSlaWatcher = () => {
     const timer = setInterval(pass, minutes * 60000);
     // Never hold the process open just for this.
     timer.unref();
-    pass();
-    logger.info(`SLA watcher running every ${minutes} minute(s)`);
+    // No pass at startup: a restart should not re-check everything, and in
+    // development nodemon restarts constantly. The first pass is one full
+    // interval after the server starts.
+    logger.info(`SLA watcher running every ${describeInterval(minutes)}; first pass in ${describeInterval(minutes)}`);
     return () => clearInterval(timer);
 };

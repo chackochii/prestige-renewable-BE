@@ -10,6 +10,12 @@ const base = {
     host: process.env.DB_HOST || "127.0.0.1",
     port: Number(process.env.DB_PORT) || 5432,
     dialect: "postgres",
+    dialectOptions: {
+        ssl: {
+            require: true,
+            rejectUnauthorized: false,
+        },
+    },
     define: {
         underscored: true, // snake_case columns in the database
     },
