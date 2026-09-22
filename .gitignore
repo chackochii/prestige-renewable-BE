@@ -21,3 +21,6 @@ coverage/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local workaround for TLS-inspecting antivirus (see README) — machine-specific
+*.pem

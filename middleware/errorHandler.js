@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { redactUrl } from "../utils/redact.js";
 
 // Postgres SQLSTATE codes for errors caused by the request's data rather than
 // by the server — a value that does not fit the column, a bad enum/number/date
@@ -65,7 +66,7 @@ export const errorHandler = (err, req, res, next) => {
 
     err = translateError(err);
     const expected = Boolean(err.status);
-    if (!expected) logger.error(`[${req.method} ${req.originalUrl}] ${err.stack ?? err.message}`);
+    if (!expected) logger.error(`[${req.method} ${redactUrl(req.originalUrl)}] ${err.stack ?? err.message}`);
 
     return res.status(err.status ?? 500).json({
         success: false,
