@@ -47,6 +47,7 @@ import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
 import { requireUnitAccess, requireOpportunityAccess } from "../middleware/requireUnitAccess.js";
+import { ADVANCE_PERMISSIONS } from "../modules/opportunity/service/stageAccess.js";
 import { uploadFiles, uploadSingleFile } from "../middleware/upload.js";
 
 const router = Router();
@@ -82,7 +83,10 @@ router.get("/", read, requireUnitAccess((req) => req.query.businessUnitId), getA
 router.post("/", requirePermission("leads.create"), requireUnitAccess((req) => req.body?.businessUnitId), create); // lead payload + businessUnitId
 router.get("/:id", readAny, getOne);
 router.patch("/:id", write, update); // lead fields, all optional
-router.post("/:id/advance", requireAnyPermission("leads.update", "estimation.update"), advance); // next enabled stage; gates apply
+// Advancing is gated per stage, not once for the whole pipeline: this only
+// filters out people who own no stage at all, and advanceStage then demands the
+// permission for the stage the record is actually leaving (see stageAccess.js).
+router.post("/:id/advance", requireAnyPermission(...ADVANCE_PERMISSIONS), advance); // next enabled stage; gates apply
 router.delete("/:id", requirePermission("leads.delete"), remove); // stage-1 records only
 
 // Job history: notes people add plus system events (assignments, notifications).

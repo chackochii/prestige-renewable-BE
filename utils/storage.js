@@ -20,8 +20,11 @@ const bucket = process.env.DO_SPACES_BUCKET;
 
 const client = new S3Client({
     endpoint: process.env.DO_SPACES_ENDPOINT,
-    // Spaces ignores the region for routing, but the SDK signs with one;
-    // DigitalOcean's docs use us-east-1.
+    // Routing comes from the endpoint; the region only goes into the request
+    // signature. Spaces accepts either the region slug ("syd1") or the
+    // us-east-1 that DigitalOcean's older docs suggest — both were verified
+    // against this bucket. The slug is set in .env because it says where the
+    // data actually lives.
     region: process.env.DO_SPACES_REGION || "us-east-1",
     forcePathStyle: false,
     // The SDK's default integrity checksums (aws-chunked uploads with a CRC32

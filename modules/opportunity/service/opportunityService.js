@@ -9,8 +9,10 @@ import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 import { isEstimationReady } from "./estimationService.js";
 import { quoteHasItems } from "./quoteService.js";
 import { notify } from "../../notification/service/notificationService.js";
+import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
+import { advancePermissionFor, readableStages, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -197,13 +199,23 @@ export const listOpportunities = async ({
     search,
     page = 1,
     pageSize = 50,
-} = {}) => {
+} = {}, actor = null) => {
     const where = { businessUnitId: parseId(businessUnitId, "business unit id") };
+
+    // A stage somebody cannot read must not reach them as a record, a count or
+    // a total — not just as a hidden column. Passing no actor (internal callers)
+    // keeps the old unfiltered behaviour.
+    const allowed = actor ? await readableStages(actor) : null;
     if (stage) {
         const parsed = Number(stage);
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 9)
             throw httpError(400, "stage must be 1–9");
+        if (allowed && !allowed.includes(parsed))
+            throw httpError(403, `Viewing ${STAGE_LABELS[parsed] ?? `stage ${parsed}`} needs ${viewPermissionFor(parsed)}`);
         where.stage = parsed;
+    } else if (allowed) {
+        // An empty list would match everything, so fall back to an id no stage has.
+        where.stage = { [Op.in]: allowed.length ? allowed : [0] };
     }
     if (lifecycle) where.lifecycle = lifecycle;
     if (search && String(search).trim()) {
@@ -413,6 +425,14 @@ export const advanceStage = async (id, actor) => {
     if (opportunity.lifecycle !== "Active")
         throw httpError(400, "Only active records can advance");
     if (opportunity.stage >= 9) throw httpError(400, "Already at the final stage");
+
+    // Leaving a stage belongs to the department that owns it, so the check is
+    // against the record's current stage rather than one blanket permission —
+    // see stageAccess.js. The route lets through anyone holding any of the
+    // stage permissions; this is where the right one is demanded.
+    const required = advancePermissionFor(opportunity.stage);
+    if (!(await userHasPermission(actor, required)))
+        throw httpError(403, `Moving a record out of ${STAGE_LABELS[opportunity.stage] ?? `stage ${opportunity.stage}`} needs ${required}`);
     if (opportunity.stage === 1) {
         if (opportunity.qualification !== "qualified")
             throw httpError(400, "Lead must be marked a potential client to progress");
