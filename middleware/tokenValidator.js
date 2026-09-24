@@ -26,20 +26,23 @@ export const tokenValidator = async (req, res, next) => {
         req.tokenPayload = payload;
 
         // Default scope excludes the password hash; paranoid excludes soft-deleted.
-        const user = await db.User.findByPk(payload.sub);
+        //
+        // The unit assignments come back in the same query rather than a second
+        // one: this runs on every authenticated request, so a round trip saved
+        // here is a round trip saved everywhere — and against a remote database
+        // that is the difference between one latency hop per request and two.
+        const user = await db.User.findByPk(payload.sub, {
+            include: [{ model: db.BusinessUnit, as: "businessUnits", attributes: ["id"], through: { attributes: [] } }],
+        });
         if (!user) return errorResponse(res, "User no longer exists", 401);
         if (user.status !== "active")
             return errorResponse(res, "Account is disabled", 401);
 
         // The units this user is assigned to, for deny-by-default unit scoping
-        // (see middleware/requireUnitAccess). Loaded once per request so guards
-        // and services can check membership without another query. ADM is
-        // unrestricted regardless of this list — see utils/unitScope.
-        const links = await db.UserBusinessUnit.findAll({
-            where: { userId: user.id },
-            attributes: ["businessUnitId"],
-        });
-        user.businessUnitIds = links.map((link) => link.businessUnitId);
+        // (see middleware/requireUnitAccess), so guards and services can check
+        // membership without another query. ADM is unrestricted regardless of
+        // this list — see utils/unitScope.
+        user.businessUnitIds = (user.businessUnits ?? []).map((u) => u.id);
 
         req.user = user;
         return next();

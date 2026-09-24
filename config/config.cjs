@@ -30,6 +30,19 @@ const base = {
     define: {
         underscored: true, // snake_case columns in the database
     },
+    // Sequelize's defaults close idle connections after 10 seconds and cap the
+    // pool at 5. Against a local Postgres that is invisible; against a managed
+    // one it means a pause in the work costs the next request a full reconnect
+    // (TCP, TLS and SCRAM — eight round trips), and a page that fires eight
+    // requests queues three of them. Keeping two connections warm and allowing
+    // twenty removes both.
+    pool: {
+        max: 10,
+        min: 2,
+        idle: 300000, // 5 min — well past a normal gap between requests
+        acquire: 30000,
+        evict: 60000,
+    },
     logging: false,
 };
 
