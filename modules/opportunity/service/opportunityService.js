@@ -196,6 +196,8 @@ export const listOpportunities = async ({
     businessUnitId,
     stage,
     lifecycle,
+    qualification,
+    ownerId,
     search,
     page = 1,
     pageSize = 50,
@@ -218,14 +220,31 @@ export const listOpportunities = async ({
         where.stage = { [Op.in]: allowed.length ? allowed : [0] };
     }
     if (lifecycle) where.lifecycle = lifecycle;
+    if (qualification) where.qualification = qualification;
+
+    // Search and owner each need their own OR, so they are combined under AND
+    // rather than both writing to where[Op.or] and the second winning.
+    const conditions = [];
     if (search && String(search).trim()) {
-        const term = `%${String(search).trim()}%`;
-        where[Op.or] = [
-            { number: { [Op.iLike]: term } },
-            { customerLegalName: { [Op.iLike]: term } },
-            { customerTradingName: { [Op.iLike]: term } },
-        ];
+        // % and _ are wildcards in LIKE: escaped so a search for "50%" means
+        // the characters, not "anything".
+        const term = `%${String(search).trim().replace(/[\\%_]/g, "\\$&")}%`;
+        conditions.push({
+            [Op.or]: [
+                { number: { [Op.iLike]: term } },
+                { customerLegalName: { [Op.iLike]: term } },
+                { customerTradingName: { [Op.iLike]: term } },
+                { siteSuburb: { [Op.iLike]: term } },
+            ],
+        });
     }
+    // The board's owner filter: whoever is carrying the record, which is the
+    // salesperson once one is assigned and the capturer before that.
+    if (ownerId) {
+        const owner = parseId(ownerId, "ownerId");
+        conditions.push({ [Op.or]: [{ salespersonId: owner }, { leadOwnerId: owner }] });
+    }
+    if (conditions.length) where[Op.and] = conditions;
 
     const limit = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
     const currentPage = Math.max(Number(page) || 1, 1);
