@@ -26,7 +26,10 @@ const client = new S3Client({
     // against this bucket. The slug is set in .env because it says where the
     // data actually lives.
     region: process.env.DO_SPACES_REGION || "us-east-1",
-    forcePathStyle: false,
+    // Spaces takes the bucket in the hostname. A local S3-compatible store
+    // (MinIO, an emulator) usually cannot, as bucket.localhost does not resolve;
+    // DO_SPACES_FORCE_PATH_STYLE=true puts the bucket in the path instead.
+    forcePathStyle: process.env.DO_SPACES_FORCE_PATH_STYLE === "true",
     // The SDK's default integrity checksums (aws-chunked uploads with a CRC32
     // trailer) are AWS-specific; S3-compatible stores can save the chunk
     // framing as file bytes. Only send checksums where S3 requires them.

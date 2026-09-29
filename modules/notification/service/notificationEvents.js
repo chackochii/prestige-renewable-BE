@@ -31,6 +31,8 @@ export const NOTIFICATION_EVENTS = {
     "assignment.progressed": { label: "Assignment progressed", priority: "low" },
     "assignment.completed": { label: "Assignment completed", priority: "medium" },
     "assignment.report.submitted": { label: "Assignment report submitted", priority: "high" },
+    "site_visit.assigned": { label: "Site visit handed to you", priority: "high" },
+    "site_visit.submitted": { label: "Site-visit form submitted", priority: "high" },
 };
 
 export const EVENT_KEYS = Object.keys(NOTIFICATION_EVENTS);

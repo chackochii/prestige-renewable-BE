@@ -24,15 +24,18 @@ import { addAttachment as fileOnOpportunity } from "../../opportunity/service/le
 import {
     DEPARTMENTS,
     REQUEST_KINDS,
-    REQUEST_PRIORITIES,
+    defaultPriorityFor,
+    prioritiesFor,
     statusesFor,
 } from "../model/collaborationRequest.js";
+import { cleanChecklistKeys, presentSiteVisit, siteAddressOf } from "./siteVisitShape.js";
 
 const {
     CollaborationRequest,
     CollaborationProgress,
     CollaborationAttachment,
     CollaborationEvent,
+    CollaborationSiteVisit,
     Opportunity,
     User,
     UserBusinessUnit,
@@ -47,8 +50,9 @@ const DECIDABLE = ["responded", "under_review"];
 const DECISIONS = ["accepted", "clarification_required", "returned"];
 const MAX_FILE_KEY = 60;
 
-const isRequester = (request, user) => Number(request.createdById) === Number(user?.id);
-const isAssignee = (request, user) => Number(request.assigneeId) === Number(user?.id);
+export const isRequester = (request, user) => Number(request.createdById) === Number(user?.id);
+export const isAssignee = (request, user) => Number(request.assigneeId) === Number(user?.id);
+export const isAdmin = (user) => Array.isArray(user?.roles) && user.roles.includes("ADM");
 
 const isOpen = (request) =>
     request.kind === "assignment"
@@ -117,6 +121,7 @@ export const presentRequest = (request, actor) => {
         description: plain.description,
         requestedFields: plain.requestedFields ?? [],
         requestedDocuments: plain.requestedDocuments ?? [],
+        inspectionChecklist: Array.isArray(plain.inspectionChecklist) ? plain.inspectionChecklist : [],
         createdById: plain.createdById,
         createdByName: plain.createdBy?.name ?? null,
         assigneeId: plain.assigneeId,
@@ -151,11 +156,26 @@ export const presentRequest = (request, actor) => {
                 : null,
         reports: attachments.filter((a) => a.category === "report"),
         progress,
+        // The form handed to whoever attends the visit. Its token is the public
+        // link, so only the people running the visit are given it.
+        siteVisit: plain.siteVisit
+            ? presentSiteVisit(plain.siteVisit, {
+                  request: plain,
+                  siteAddress: siteAddressOf(plain.opportunity),
+                  photos: attachments.filter((a) => a.category === "site_visit"),
+                  includeToken: forAssignee || isRequester(request, actor) || isAdmin(actor),
+              })
+            : null,
     };
 };
 
 const requestInclude = () => [
-    { model: Opportunity, as: "opportunity", attributes: ["id", "number", "customerLegalName", "customerTradingName"] },
+    {
+        model: Opportunity,
+        as: "opportunity",
+        attributes: ["id", "number", "customerLegalName", "customerTradingName", "siteLine1", "siteSuburb", "siteState", "sitePostcode"],
+    },
+    { model: CollaborationSiteVisit, as: "siteVisit" },
     { model: User, as: "createdBy", attributes: ["id", "name"] },
     { model: User, as: "assignee", attributes: ["id", "name"] },
     { model: User, as: "responseSubmittedBy", attributes: ["id", "name"] },
@@ -165,7 +185,7 @@ const requestInclude = () => [
 
 // ---- Loading & access -------------------------------------------------------
 
-const loadRequest = async (id) => {
+export const loadRequest = async (id) => {
     const request = await CollaborationRequest.findByPk(parseId(id, "request id"), { include: requestInclude() });
     if (!request) throw httpError(404, "Request not found");
     return request;
@@ -185,7 +205,7 @@ export const assertReadable = (request, user) => {
 
 const reload = async (request, actor) => presentRequest(await loadRequest(request.id), actor);
 
-const recordEvent = (request, action, detail, actor) =>
+export const recordEvent = (request, action, detail, actor) =>
     CollaborationEvent.create({
         requestId: request.id,
         action,
@@ -193,7 +213,7 @@ const recordEvent = (request, action, detail, actor) =>
         actorId: actor?.id ?? null,
     });
 
-const assertAssignable = async (userId, request) => {
+export const assertAssignable = async (userId, request) => {
     const user = await User.findByPk(parseId(userId, "assigneeId"), { attributes: ["id", "name", "status"] });
     if (!user) throw httpError(400, "Unknown user for assigneeId");
     if (user.status !== "active") throw httpError(400, `${user.name} is not an active account`);
@@ -209,7 +229,7 @@ const assertAssignable = async (userId, request) => {
 const customerOf = (request) =>
     request.opportunity?.customerLegalName || request.opportunity?.customerTradingName || "the customer";
 
-const requestLabel = (request) => `${KIND_PREFIX[request.kind] || "REQ"}-${request.id}`;
+export const requestLabel = (request) => `${KIND_PREFIX[request.kind] || "REQ"}-${request.id}`;
 
 // ---- Reads ------------------------------------------------------------------
 
@@ -324,8 +344,11 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
         throw httpError(400, `department must be one of: ${DEPARTMENTS.join(", ")}`);
     const title = String(payload.title ?? "").trim();
     if (!title) throw httpError(400, "title is required");
-    if (payload.priority && !REQUEST_PRIORITIES.includes(payload.priority))
-        throw httpError(400, `priority must be one of: ${REQUEST_PRIORITIES.join(", ")}`);
+    // An assignment is prioritised by whether it has to happen at all, an
+    // information request by urgency — each on its own scale.
+    const priorities = prioritiesFor(kind);
+    if (payload.priority && !priorities.includes(payload.priority))
+        throw httpError(400, `priority must be one of: ${priorities.join(", ")}`);
 
     const draft = CollaborationRequest.build({
         businessUnitId: opportunity.businessUnitId,
@@ -338,7 +361,10 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
         requestedFields: kind === "information" ? cleanFields(payload.requestedFields) : [],
         requestedDocuments: cleanDocuments(payload.requestedDocuments),
         createdById: user.id,
-        priority: payload.priority || "medium",
+        priority: payload.priority || defaultPriorityFor(kind),
+        // A pre-site inspection's required checklist items — the site
+        // member's form is built from them. Only assignments go out to site.
+        inspectionChecklist: kind === "assignment" ? cleanChecklistKeys(payload.inspectionChecklist) : [],
         dueAt: parseDate(payload.dueAt, "dueAt"),
         scheduledFor: kind === "assignment" ? parseDate(payload.scheduledFor, "scheduledFor") : null,
         status: kind === "assignment" ? "requested" : "pending",
@@ -377,10 +403,13 @@ export const updateRequest = async (user, id, payload = {}) => {
     if (payload.description !== undefined)
         fields.description = payload.description ? String(payload.description).slice(0, 5000) : null;
     if (payload.priority !== undefined) {
-        if (!REQUEST_PRIORITIES.includes(payload.priority))
-            throw httpError(400, `priority must be one of: ${REQUEST_PRIORITIES.join(", ")}`);
+        const priorities = prioritiesFor(request.kind);
+        if (!priorities.includes(payload.priority))
+            throw httpError(400, `priority must be one of: ${priorities.join(", ")}`);
         fields.priority = payload.priority;
     }
+    if (payload.inspectionChecklist !== undefined && request.kind === "assignment")
+        fields.inspectionChecklist = cleanChecklistKeys(payload.inspectionChecklist);
     if (payload.dueAt !== undefined) fields.dueAt = parseDate(payload.dueAt, "dueAt");
 
     let reassignedTo = null;
@@ -498,7 +527,14 @@ export const decideResponse = async (user, id, payload = {}) => {
 
 // ---- Working an assignment --------------------------------------------------
 
-/** body: { status, note?, scheduledFor?, internal? } */
+/**
+ * body: { status, note?, scheduledFor?, internal?, assigneeId? }
+ *
+ * assigneeId hands the assignment to someone else as part of the update — the
+ * coordinator passing a site visit to whoever will attend. Only a change to a
+ * named person counts; null or the current assignee leaves it where it is,
+ * matching the progress form, which treats "nobody" as no reassignment.
+ */
 export const addProgress = async (user, id, payload = {}) => {
     const request = assertReadable(await loadRequest(id), user);
     if (request.kind !== "assignment") throw httpError(400, "Only assignments take progress updates");
@@ -512,21 +548,50 @@ export const addProgress = async (user, id, payload = {}) => {
     const note = payload.note ? String(payload.note).slice(0, 5000) : null;
     const scheduledFor = payload.scheduledFor !== undefined ? parseDate(payload.scheduledFor, "scheduledFor") : undefined;
 
+    const wanted = payload.assigneeId;
+    const reassignedTo =
+        wanted !== undefined && wanted !== null && wanted !== "" && Number(wanted) !== Number(request.assigneeId)
+            ? await assertAssignable(wanted, request)
+            : null;
+
+    // A reassignment on its own — same status, no note, same date — is not
+    // progress; it gets its own history line rather than an empty update.
+    const scheduleChanged =
+        scheduledFor !== undefined && String(scheduledFor ?? "") !== String(request.scheduledFor ?? "");
+    const progressed = status !== request.status || Boolean(note) || scheduleChanged;
+    if (!progressed && !reassignedTo) throw httpError(400, "Add a note, move the status on, or assign someone");
+
     await request.update({
         status,
         ...(scheduledFor !== undefined ? { scheduledFor } : {}),
+        ...(reassignedTo ? { assigneeId: reassignedTo.id } : {}),
     });
-    await CollaborationProgress.create({
-        requestId: request.id,
-        status,
-        note,
-        internal,
-        authorId: user.id,
-    });
-    await recordEvent(request, internal ? "Internal progress note" : "Progress update", note, user);
+    if (progressed) {
+        await CollaborationProgress.create({
+            requestId: request.id,
+            status,
+            note,
+            internal,
+            authorId: user.id,
+        });
+        await recordEvent(request, internal ? "Internal progress note" : "Progress update", note, user);
+    }
+
+    if (reassignedTo) {
+        await recordEvent(request, "Assignment reassigned", reassignedTo.name, user);
+        await notify({
+            event: "request.created",
+            title: `${requestLabel(request)}: ${request.title}`,
+            body: `${user.name} passed this assignment to you${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""}.`,
+            userIds: [reassignedTo.id],
+            businessUnitId: request.businessUnitId,
+            opportunity: request.opportunity,
+            actor: user,
+        });
+    }
 
     // Internal notes stay inside the department, so they raise nothing.
-    if (!internal && request.createdById) {
+    if (progressed && !internal && request.createdById) {
         const event =
             status === "report_submitted"
                 ? "assignment.report.submitted"

@@ -1,10 +1,12 @@
 // A file supplied against a request. "attachment" answers one of the
 // documents the requester asked for (documentKey says which); "report" is the
-// write-up the requester waits on at the end of an assignment.
+// write-up the requester waits on at the end of an assignment; "site_visit"
+// is a photo or document sent back through the public site-visit form, with
+// no signed-in uploader.
 //
 // The file itself lives in the Space (utils/storage.js); storageKey is its
 // object key and never leaves the server.
-export const ATTACHMENT_CATEGORIES = ["attachment", "report"];
+export const ATTACHMENT_CATEGORIES = ["attachment", "report", "site_visit"];
 
 export default (sequelize, DataTypes) => {
     const CollaborationAttachment = sequelize.define(

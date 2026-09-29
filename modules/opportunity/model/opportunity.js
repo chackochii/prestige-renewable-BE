@@ -34,7 +34,7 @@ export const ESTIMATION_INPUT_KEYS = [
     "permits", "vppDiscussed", "vppEligibility", "vppNotes", "permitNotes", "meterRequirements",
     "drawingsOnFile", "drawingsNotes",
     // Customer
-    "inclusions", "exclusions", "noteForEstimator",
+    "inclusions", "exclusions", "noteForEstimator", "clientSpecialRequirements",
 ];
 
 export default (sequelize, DataTypes) => {

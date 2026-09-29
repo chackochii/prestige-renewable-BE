@@ -6,9 +6,17 @@
 import { errorResponse } from "../utils/apiResponse.js";
 
 /**
- * @param {{ windowMs?: number, max?: number, message?: string }} options
+ * @param {{ windowMs?: number, max?: number, message?: string, key?: (req) => string }} options
+ *   key — what the limit counts per. Defaults to the client address; a route
+ *   authorised by a token in its path counts per token instead, so one leaked
+ *   link is bounded and people sharing an office address are not.
  */
-export const rateLimit = ({ windowMs = 15 * 60 * 1000, max = 10, message = "Too many requests, try again later." } = {}) => {
+export const rateLimit = ({
+    windowMs = 15 * 60 * 1000,
+    max = 10,
+    message = "Too many requests, try again later.",
+    key: keyOf = null,
+} = {}) => {
     const hits = new Map(); // ip → { count, resetAt }
     const MAX_TRACKED = 10_000; // bound memory under a flood from many addresses
 
@@ -23,7 +31,7 @@ export const rateLimit = ({ windowMs = 15 * 60 * 1000, max = 10, message = "Too 
 
     return (req, res, next) => {
         const now = Date.now();
-        const key = req.ip || req.socket?.remoteAddress || "unknown";
+        const key = (keyOf && keyOf(req)) || req.ip || req.socket?.remoteAddress || "unknown";
         let entry = hits.get(key);
         if (!entry || entry.resetAt <= now) {
             if (hits.size >= MAX_TRACKED) sweep();

@@ -9,6 +9,10 @@ import { redactUrl } from "./utils/redact.js";
 const app = express();
 
 app.use(cors());
+// A site-visit report carries drawn signatures as PNG data URLs, which outgrow
+// the 100 kB default. Only that public route gets the larger allowance; the
+// general parser below then leaves an already-parsed body alone.
+app.use("/api/public/site-visits", express.json({ limit: "1mb" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // The file and notification-stream routes carry a token in the query string;

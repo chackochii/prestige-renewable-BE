@@ -1,5 +1,6 @@
 import { pipeline } from "node:stream/promises";
 import * as service from "../service/collaborationService.js";
+import * as siteVisits from "../service/siteVisitService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse, errorResponse } from "../../../utils/apiResponse.js";
 import { INLINE_MIME } from "../../opportunity/service/leadAttachmentService.js";
@@ -64,6 +65,16 @@ export const addAttachment = asyncHandler(async (req, res) => {
     );
 
     successResponse(res, { data: result }, 201);
+});
+
+// ---- Site-visit form (the staff side) ---------------------------------------
+
+export const saveSiteVisit = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await siteVisits.saveSiteVisitTask(req.user, req.params.id, req.body) });
+});
+
+export const deleteSiteVisitPhoto = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await siteVisits.deleteSiteVisitPhoto(req.user, req.params.id, req.params.photoId) });
 });
 
 export const fileOnJob = asyncHandler(async (req, res) => {

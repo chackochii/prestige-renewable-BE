@@ -7,7 +7,9 @@
 // never choose one, so the unit names are not exposed to anonymous callers.
 import { Router } from "express";
 import { createFromPublicForm } from "../modules/opportunity/controller/publicLeadController.js";
+import * as siteVisit from "../modules/collaboration/controller/publicSiteVisitController.js";
 import rateLimit from "../middleware/rateLimit.js";
+import { uploadSingleFile } from "../middleware/upload.js";
 import { errorResponse } from "../utils/apiResponse.js";
 
 const router = Router();
@@ -30,5 +32,23 @@ router.post(
     rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }),
     createFromPublicForm
 ); // { name, email, phone, siteLine1?, siteSuburb?, siteState?, sitePostcode?, message?, businessUnit? } → { number, businessUnit }
+
+// ---- Site-visit form --------------------------------------------------------
+// The link a coordinator hands to whoever attends a visit. The token in the
+// path is the caller's whole authority: one form, nothing else, and never
+// the customer or the job (see siteVisitShape.presentPublicTask).
+//
+// Writes are limited per token rather than per address — a crew on one site
+// shares a mobile gateway, while a leaked link is bounded on its own.
+const perToken = (req) => `site-visit:${req.params.token}`;
+const siteVisitRead = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
+const siteVisitUpload = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: perToken, message: "Too many uploads on this form — wait a few minutes." });
+const siteVisitSubmit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: perToken });
+
+router.get("/site-visits/:token", siteVisitRead, siteVisit.getTask); // → { status, title, siteAddress, requestedFields, requestedDocuments, photos, … }
+router.post("/site-visits/:token", siteVisitSubmit, siteVisit.submitTask); // { name, email?, phone?, fields } → the task, now submitted
+// Limited before multer, so a flood is refused before it is parsed.
+router.post("/site-visits/:token/photos", siteVisitUpload, uploadSingleFile, siteVisit.uploadPhoto); // multipart: file + documentKey → { id, filename, url, documentKey }
+router.get("/site-visits/:token/photos/:photoId", siteVisitRead, siteVisit.downloadPhoto);
 
 export default router;

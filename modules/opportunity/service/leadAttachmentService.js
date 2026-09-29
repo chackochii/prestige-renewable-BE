@@ -21,7 +21,7 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 
 // MIME type by extension. The type a client declares in the multipart part is
 // never stored — a browser would render it, so it must come from the server.
-const MIME_BY_EXTENSION = {
+export const MIME_BY_EXTENSION = {
     jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp",
     heic: "image/heic", bmp: "image/bmp",
     pdf: "application/pdf",
@@ -67,7 +67,7 @@ const safeFileName = (name) => {
     return `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${base}`;
 };
 
-const extensionOf = (name) => path.extname(String(name || "")).slice(1).toLowerCase();
+export const extensionOf = (name) => path.extname(String(name || "")).slice(1).toLowerCase();
 
 const loadOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));

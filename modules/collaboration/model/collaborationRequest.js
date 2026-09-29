@@ -5,7 +5,18 @@
 
 export const REQUEST_KINDS = ["information", "assignment"];
 export const DEPARTMENTS = ["sales", "operations", "procurement", "finance", "admin"];
+/** How urgent an information request is. */
 export const REQUEST_PRIORITIES = ["low", "medium", "high", "urgent"];
+/**
+ * An assignment's priority says whether the activity has to happen at all,
+ * not how urgent it is — operations schedules off necessity.
+ */
+export const ASSIGNMENT_PRIORITIES = ["required", "preferred", "not_required"];
+
+export const prioritiesFor = (kind) => (kind === "assignment" ? ASSIGNMENT_PRIORITIES : REQUEST_PRIORITIES);
+
+/** What a new request starts on when the requester does not say. */
+export const defaultPriorityFor = (kind) => (kind === "assignment" ? "required" : "medium");
 
 /** information: pending → responded → under review → accepted. */
 export const INFORMATION_STATUSES = [
@@ -58,12 +69,12 @@ export default (sequelize, DataTypes) => {
             requestedDocuments: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
             createdById: { type: DataTypes.INTEGER },
             assigneeId: { type: DataTypes.INTEGER },
-            priority: {
-                type: DataTypes.STRING(10),
-                allowNull: false,
-                defaultValue: "medium",
-                validate: { isIn: [REQUEST_PRIORITIES] },
-            },
+            // Checked against its kind's scale by priorityBelongsToKind below.
+            priority: { type: DataTypes.STRING(20), allowNull: false, defaultValue: "medium" },
+            // Pre-site inspection: the checklist items the requester marked as
+            // required, which become the site member's form. Keys from
+            // prestige-fe/src/constants/inspectionReport.js.
+            inspectionChecklist: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
             dueAt: { type: DataTypes.DATE },
             scheduledFor: { type: DataTypes.DATE },
             status: { type: DataTypes.STRING(30), allowNull: false },
@@ -82,6 +93,12 @@ export default (sequelize, DataTypes) => {
                 statusBelongsToKind() {
                     if (this.status && !statusesFor(this.kind).includes(this.status))
                         throw new Error(`status "${this.status}" is not valid for a ${this.kind} request`);
+                },
+                priorityBelongsToKind() {
+                    if (this.priority && !prioritiesFor(this.kind).includes(this.priority))
+                        throw new Error(
+                            `priority must be one of: ${prioritiesFor(this.kind).join(", ")} for ${this.kind === "assignment" ? "an assignment" : "an information request"}`
+                        );
                 },
             },
             indexes: [
@@ -102,6 +119,7 @@ export default (sequelize, DataTypes) => {
         CollaborationRequest.hasMany(db.CollaborationProgress, { foreignKey: "requestId", as: "progress" });
         CollaborationRequest.hasMany(db.CollaborationAttachment, { foreignKey: "requestId", as: "attachments" });
         CollaborationRequest.hasMany(db.CollaborationEvent, { foreignKey: "requestId", as: "events" });
+        CollaborationRequest.hasOne(db.CollaborationSiteVisit, { foreignKey: "requestId", as: "siteVisit" });
     };
 
     return CollaborationRequest;

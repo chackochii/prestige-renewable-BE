@@ -72,7 +72,7 @@ const MAX_LENGTH = {
 const toBool = (value) => value === true || value === 1 || value === "true" || value === "1";
 const text = (value, max) => String(value ?? "").trim().slice(0, max);
 
-// [{ method, contactedAt, reached, reason }] — kept as given, trimmed and capped.
+// [{ method, contactedAt, reached, reason, notes }] — kept as given, trimmed and capped.
 const sanitizeContactAttempts = (list) => {
     if (!Array.isArray(list)) throw httpError(400, "contactAttempts must be an array");
     if (list.length > 50) throw httpError(400, "contactAttempts: at most 50 entries");
@@ -85,6 +85,7 @@ const sanitizeContactAttempts = (list) => {
             contactedAt,
             reached: a?.reached !== false && a?.reached !== "false",
             reason: text(a?.reason, 2000),
+            notes: text(a?.notes, 2000), // what was said, reached or not
         };
     });
 };

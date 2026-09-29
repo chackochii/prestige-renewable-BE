@@ -3,6 +3,7 @@ import {
     addAttachment,
     cancel,
     decide,
+    deleteSiteVisitPhoto,
     downloadAttachment,
     getAll,
     getHistory,
@@ -10,6 +11,7 @@ import {
     fileOnJob,
     progress,
     respond,
+    saveSiteVisit,
     update,
 } from "../modules/collaboration/controller/collaborationController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
@@ -54,5 +56,11 @@ router.post("/requests/:id/decision", read, decide); // requester: { outcome, no
 router.post("/requests/:id/progress", read, progress); // assignee: { status, note?, scheduledFor?, internal? }
 router.post("/requests/:id/attachments", read, uploadSingleFile, addAttachment); // multipart: file + category + documentKey?
 router.post("/requests/:id/attachments/file-on-job", writeRecord, fileOnJob); // { attachmentId, category }
+
+// The site-visit form a coordinator hands to whoever attends. Who may manage it
+// (assignee, requester, ADM) is decided in the service; the person attending
+// fills it in through the public routes with the link's token.
+router.post("/requests/:id/site-visit", read, saveSiteVisit); // { assigneeId? | assigneeName, requestedFields, requestedDocuments } → request
+router.delete("/requests/:id/site-visit/photos/:photoId", read, deleteSiteVisitPhoto); // → request
 
 export default router;

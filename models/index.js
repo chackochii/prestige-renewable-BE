@@ -37,6 +37,7 @@ import defineCollaborationRequest from "../modules/collaboration/model/collabora
 import defineCollaborationProgress from "../modules/collaboration/model/collaborationProgress.js";
 import defineCollaborationAttachment from "../modules/collaboration/model/collaborationAttachment.js";
 import defineCollaborationEvent from "../modules/collaboration/model/collaborationEvent.js";
+import defineCollaborationSiteVisit from "../modules/collaboration/model/collaborationSiteVisit.js";
 
 const db = { sequelize };
 
@@ -86,6 +87,7 @@ db.CollaborationRequest = defineCollaborationRequest(sequelize, DataTypes);
 db.CollaborationProgress = defineCollaborationProgress(sequelize, DataTypes);
 db.CollaborationAttachment = defineCollaborationAttachment(sequelize, DataTypes);
 db.CollaborationEvent = defineCollaborationEvent(sequelize, DataTypes);
+db.CollaborationSiteVisit = defineCollaborationSiteVisit(sequelize, DataTypes);
 
 Object.values(db)
     .filter((model) => typeof model?.associate === "function")
@@ -127,6 +129,7 @@ export const {
     CollaborationProgress,
     CollaborationAttachment,
     CollaborationEvent,
+    CollaborationSiteVisit,
 } = db;
 
 export { sequelize };
