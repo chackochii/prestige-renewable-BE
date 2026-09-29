@@ -1,4 +1,5 @@
 import { pipeline } from "node:stream/promises";
+import { handOverToProposal } from "../service/estimationHandover.js";
 import {
     listOpportunities,
     getOpportunity,
@@ -70,6 +71,11 @@ export const advance = asyncHandler(async (req, res) => {
     const opportunity = await advanceStage(req.params.id, req.user);
 
     successResponse(res, { data: opportunity });
+});
+
+/** Estimation sends its saved quote on to proposal — the stage-2 advance, with a note to sales. */
+export const estimationHandover = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await handOverToProposal(req.params.id, req.body, req.user) });
 });
 
 export const remove = asyncHandler(async (req, res) => {

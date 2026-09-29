@@ -19,6 +19,7 @@ export const NOTIFICATION_EVENTS = {
     "estimation.site_visit": { label: "Pre-site inspection needed", priority: "medium" },
     "lead.changed": { label: "Lead details changed after handover", priority: "high" },
     "estimation.inputs.accepted": { label: "Estimation accepted the lead inputs", priority: "medium" },
+    "estimation.handover": { label: "Quote ready — send the proposal", priority: "high" },
 
     // Cross-department requests and assignments (modules/collaboration).
     "request.created": { label: "Request or assignment for you", priority: "high" },
@@ -33,6 +34,12 @@ export const NOTIFICATION_EVENTS = {
     "assignment.report.submitted": { label: "Assignment report submitted", priority: "high" },
     "site_visit.assigned": { label: "Site visit handed to you", priority: "high" },
     "site_visit.submitted": { label: "Site-visit form submitted", priority: "high" },
+
+    // The customer and their proposal link (modules/opportunity/service/proposalService).
+    "proposal.viewed": { label: "Customer opened their proposal", priority: "low" },
+    "proposal.accepted": { label: "Customer accepted the proposal", priority: "high" },
+    "proposal.renegotiate": { label: "Customer asked to renegotiate", priority: "high" },
+    "proposal.rejected": { label: "Customer declined the proposal", priority: "high" },
 };
 
 export const EVENT_KEYS = Object.keys(NOTIFICATION_EVENTS);

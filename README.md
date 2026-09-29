@@ -59,6 +59,9 @@ DO_SPACES_BUCKET=prestige-documents
 DO_SPACES_KEY=
 DO_SPACES_SECRET=
 # DO_SPACES_REGION=us-east-1
+
+# Customer proposal links — the address the link in a proposal email opens
+# FRONTEND_URL=https://app.example.com
 ```
 
 | Variable | Required | Purpose |
@@ -78,6 +81,7 @@ DO_SPACES_SECRET=
 | `DO_SPACES_BUCKET` | yes | Name of the Space uploaded documents are stored in |
 | `DO_SPACES_KEY` / `DO_SPACES_SECRET` | yes | Spaces access key with read, write and delete on the Space |
 | `DO_SPACES_REGION` | no (default `us-east-1`) | Signing region; DigitalOcean's docs use `us-east-1` |
+| `FRONTEND_URL` | production | Base of the link in a customer's proposal email (`<FRONTEND_URL>/proposal/<token>`). Without it the link uses the address of the app the sender is using. The email itself is sent by the sales rep from their own Gmail — the server sends no mail |
 
 > Keep the `SEED_SUPERADMIN_*` values in `.env` — the seeder's rollback (`db:seed:undo`) matches on the same email it seeded with.
 

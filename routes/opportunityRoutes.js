@@ -29,6 +29,7 @@ import {
     estimationCollectedInputs,
     estimationAcceptInputs,
     estimationAcknowledgeLeadChange,
+    estimationHandover,
     notifyEstimatorOfChange,
     getQuote,
     getQuoteVersions,
@@ -43,6 +44,7 @@ import {
     deleteQuoteCost,
 } from "../modules/opportunity/controller/opportunityController.js";
 import * as collaboration from "../modules/collaboration/controller/collaborationController.js";
+import * as proposals from "../modules/opportunity/controller/proposalController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -73,6 +75,10 @@ router.get(
 );
 router.use(tokenValidator);
 
+// The proposals page: stage-3 jobs with their latest proposal. Mounted before
+// the /:id scope below so "proposals" is never read as an opportunity id.
+router.get("/proposals", read, requireUnitAccess((req) => req.query.businessUnitId), proposals.board); // ?businessUnitId=&search= → [{ opportunity, latestQuoteVersion, proposal, proposalCount }]
+
 // Deny-by-default unit scoping (ADM excepted): a caller only reaches records
 // in the business units they are assigned to. Every /:id/... route below is
 // covered by this one mount — an out-of-scope record answers 404 before any
@@ -88,6 +94,14 @@ router.patch("/:id", write, update); // lead fields, all optional
 // permission for the stage the record is actually leaving (see stageAccess.js).
 router.post("/:id/advance", requireAnyPermission(...ADVANCE_PERMISSIONS), advance); // next enabled stage; gates apply
 router.delete("/:id", requirePermission("leads.delete"), remove); // stage-1 records only
+
+// Proposals emailed to the customer (stage 3). Sending, resending and recording
+// an answer given by phone are sales work; the customer answers through the
+// public link (routes/publicRoutes.js).
+router.get("/:id/proposals", readAny, proposals.list); // → proposals, newest first
+router.post("/:id/proposals", write, proposals.send); // { quoteVersionId, to?, subject?, message? } → { proposal, link }
+router.post("/:id/proposals/:proposalId/resend", write, proposals.resend); // { to? } → { proposal, link }; the old link stops working
+router.post("/:id/proposals/:proposalId/outcome", write, proposals.outcome); // { outcome: accepted|rejected|renegotiate, note?, customerName? } → { proposal, opportunity }
 
 // Job history: notes people add plus system events (assignments, notifications).
 router.get("/:id/history", readAny, getHistory);
@@ -129,6 +143,7 @@ router.post("/:id/estimation/checklist", estimate, estimationChecklist);
 router.post("/:id/estimation/collected-inputs", estimate, estimationCollectedInputs); // { input }
 router.post("/:id/estimation/accept-inputs", estimate, estimationAcceptInputs);
 router.post("/:id/estimation/acknowledge-lead-change", estimate, estimationAcknowledgeLeadChange); // clears the "lead details changed" notice
+router.post("/:id/estimation/handover", estimate, estimationHandover); // { quoteVersionId?, note? } → the opportunity, moved on to proposal
 
 // Cross-department requests and assignments raised from a stage of this
 // record. Everything afterwards (responding, deciding, progress, files) lives

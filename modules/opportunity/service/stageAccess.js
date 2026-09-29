@@ -49,6 +49,15 @@ export const STAGE_ADVANCE_PERMISSION = {
     9: "warranty.update", // handover pack completed
 };
 
+/**
+ * Stages no longer in the pipeline. Stage 4 (Sales closure) was folded into
+ * Proposal: the client accepting the proposal sends the job straight to
+ * Approvals, as the Sydpro process chart has it. Numbers are never reused, so
+ * a record left at a retired stage still reads correctly — it just cannot be
+ * advanced into one.
+ */
+export const RETIRED_STAGES = [4];
+
 /** Short stage names, so a refusal says "out of Billing" rather than "out of stage 8". */
 export const STAGE_LABELS = {
     1: "Lead capture",

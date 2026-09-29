@@ -1,5 +1,5 @@
 // Pipeline stages:
-// 1 Lead · 2 Estimation · 3 Proposal · 4 Sales closure · 5 Approvals
+// 1 Lead · 2 Estimation · 3 Proposal · (4 Sales closure — retired, see stageAccess.RETIRED_STAGES) · 5 Approvals
 // 6 Procurement · 7 Site works · 8 Billing · 9 Handover
 
 // Lead-checklist option keys. These mirror

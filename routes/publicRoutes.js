@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { createFromPublicForm } from "../modules/opportunity/controller/publicLeadController.js";
 import * as siteVisit from "../modules/collaboration/controller/publicSiteVisitController.js";
+import * as proposal from "../modules/opportunity/controller/proposalController.js";
 import rateLimit from "../middleware/rateLimit.js";
 import { uploadSingleFile } from "../middleware/upload.js";
 import { errorResponse } from "../utils/apiResponse.js";
@@ -50,5 +51,16 @@ router.post("/site-visits/:token", siteVisitSubmit, siteVisit.submitTask); // { 
 // Limited before multer, so a flood is refused before it is parsed.
 router.post("/site-visits/:token/photos", siteVisitUpload, uploadSingleFile, siteVisit.uploadPhoto); // multipart: file + documentKey → { id, filename, url, documentKey }
 router.get("/site-visits/:token/photos/:photoId", siteVisitRead, siteVisit.downloadPhoto);
+
+// ---- Proposal link ----------------------------------------------------------
+// The link in the customer's proposal email. The token is the whole authority:
+// one proposal, and only what the customer needs to read and answer it. Answers
+// are limited per token — a customer answers once; the limit only bounds
+// someone hammering a leaked link.
+const proposalRead = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
+const proposalRespond = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: (req) => `proposal:${req.params.token}` });
+
+router.get("/proposals/:token", proposalRead, proposal.getPublic); // → { state, number, business, contact, grandTotal, quoteVersion: { snapshot }, response, … }
+router.post("/proposals/:token/respond", bodySizeGuard, proposalRespond, proposal.respondPublic); // { decision: accept|reject|renegotiate, name, note?, agree? } → the same, answered
 
 export default router;

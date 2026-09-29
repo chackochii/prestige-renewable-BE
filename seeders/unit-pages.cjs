@@ -19,6 +19,7 @@
 const PAGES = [
     ["leads", "Leads", "/leads", 5, "page.leads.view"],
     ["pipeline", "Pipeline", "/pipeline", 10, "page.pipeline.view"],
+    ["proposals", "Proposals", "/proposals", 15, "page.proposals.view"],
     ["marketing", "Marketing", "/marketing", 20, "page.marketing.view"],
     ["approvals", "Approvals", "/approvals", 30, "page.approvals.view"],
     ["procurement", "Procurement", "/procurement", 40, "page.procurement.view"],
@@ -38,6 +39,8 @@ const PAGES = [
 const GRANTS = {
     "page.leads.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "FIN"],
     "page.pipeline.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "FIN"],
+    // Proposals are sales work with estimation behind them — the pipeline audience.
+    "page.proposals.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "FIN"],
     "page.marketing.view": ["BO", "SMM"],
     "page.approvals.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "PROC", "FIN"],
     "page.procurement.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "SITEOM", "CREW", "PROC", "FIN"],

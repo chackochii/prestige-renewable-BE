@@ -12,7 +12,7 @@ import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
-import { advancePermissionFor, readableStages, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
+import { advancePermissionFor, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -439,7 +439,7 @@ export const updateLead = async (id, payload = {}, actor) => {
 // renumbered) and restart the SLA clock from the unit's slaDays config.
 // Stage gates live here — leaving lead capture needs a potential (qualified)
 // lead with an estimator.
-export const advanceStage = async (id, actor) => {
+export const advanceStage = async (id, actor, message = {}) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
     if (!opportunity) throw httpError(404, "Opportunity not found");
     if (opportunity.lifecycle !== "Active")
@@ -466,12 +466,36 @@ export const advanceStage = async (id, actor) => {
             throw httpError(400, "Answer the client-input question before leaving estimation");
         if (!(await quoteHasItems(opportunity.id)))
             throw httpError(400, "Add at least one item to the quote before leaving estimation");
+        // The proposal stage sends a saved version to the customer, so one has
+        // to exist before the job gets there.
+        if (!(await db.QuoteVersion.count({ where: { opportunityId: opportunity.id } })))
+            throw httpError(400, "Save the quote as a version before sending it to proposal");
     }
 
+    // Leaving the proposal stage needs the customer's yes — through their
+    // link, or recorded by sales after a call (see proposalService).
+    if (opportunity.stage === 3) {
+        const accepted = await db.Proposal.count({ where: { opportunityId: opportunity.id, status: "accepted" } });
+        if (!accepted) throw httpError(400, "The customer has not accepted a proposal yet");
+    }
+
+    return moveToNextStage(opportunity, actor, message);
+};
+
+/**
+ * The move itself, with no permission check or gate: the next stage the unit
+ * runs, a fresh SLA clock and a notification. advanceStage calls it for a
+ * person; proposalService calls it when a customer accepts through their
+ * link, where there is no signed-in user (actor null, byline passed instead).
+ * A hand-over with more to say (estimation sending its quote to proposal)
+ * passes its own event, title and body for the notification.
+ */
+export const moveToNextStage = async (opportunity, actor = null, { byline = null, event = null, title = null, body = null } = {}) => {
     const unit = await BusinessUnit.findByPk(opportunity.businessUnitId);
     const enabled = (Array.isArray(unit?.enabledStages) ? unit.enabledStages : []).map(Number);
     let next = opportunity.stage + 1;
-    while (next <= 9 && enabled.length && !enabled.includes(next)) next += 1;
+    // Retired stages are skipped for every unit, whatever its config says.
+    while (next <= 9 && (RETIRED_STAGES.includes(next) || (enabled.length && !enabled.includes(next)))) next += 1;
     if (next > 9) throw httpError(400, "No further stage is enabled for this business unit");
 
     const slaDays = Number(unit?.slaDays?.[next] ?? 0);
@@ -484,9 +508,9 @@ export const advanceStage = async (id, actor) => {
     });
 
     await notify({
-        event: "stage.advanced",
-        title: `${opportunity.number} moved to stage ${next}`,
-        body: `${customerLabel(opportunity)} — stage ${from} → ${next}${actor?.name ? `, moved by ${actor.name}` : ""}.`,
+        event: event || "stage.advanced",
+        title: title || `${opportunity.number} moved to stage ${next}`,
+        body: body || `${customerLabel(opportunity)} — stage ${from} → ${next}${actor?.name ? `, moved by ${actor.name}` : byline ? `, ${byline}` : ""}.`,
         userIds: assignedUserIds(opportunity),
         opportunity,
         actor,
