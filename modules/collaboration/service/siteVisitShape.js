@@ -124,12 +124,15 @@ const SIGNATURE_RE = /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/;
 const MAX_SIGNATURE_CHARS = 500_000;
 
 /**
- * Checks a submission against the fields the coordinator asked for. Returns
- * { clean, errors } — errors are [{ field, message }] with the same field
- * names the public form highlights ("name", "email", "phone", "field:<key>"),
- * listing every problem at once. Answers to fields nobody asked for are dropped.
+ * Checks a submission against the form's fields (see inspectionForm.js
+ * fieldsToCheck). Returns { clean, errors } — errors are [{ field, message }]
+ * with the same field names the public form highlights ("name", "email",
+ * "phone", "field:<key>"), listing every problem at once. A field is required
+ * unless it says `required: false`; answers to fields not on the form are
+ * dropped. `contactRequired` is false when the crew member is already known
+ * from the assignment — then email and phone are optional.
  */
-export const sanitizeSubmission = (body, requestedFields = []) => {
+export const sanitizeSubmission = (body, requestedFields = [], { contactRequired = true } = {}) => {
     const src = body && typeof body === "object" && !Array.isArray(body) ? body : {};
     const errors = [];
     const fail = (field, message) => errors.push({ field, message });
@@ -140,7 +143,7 @@ export const sanitizeSubmission = (body, requestedFields = []) => {
 
     const email = oneLine(src.email, 254).toLowerCase();
     const phone = oneLine(src.phone, 30);
-    if (!email && !phone) fail("email", "Give an email or a phone number so we can reach you.");
+    if (contactRequired && !email && !phone) fail("email", "Give an email or a phone number so we can reach you.");
     if (email && (email.length > 254 || !EMAIL_RE.test(email))) fail("email", "Enter a valid email address.");
     if (phone) {
         const digits = (phone.match(/\d/g) || []).length;
@@ -153,7 +156,8 @@ export const sanitizeSubmission = (body, requestedFields = []) => {
     for (const field of requestedFields) {
         const raw = given[field.key];
         const at = `field:${field.key}`;
-        const needed = () => fail(at, `${field.label} is needed.`);
+        const optional = field.required === false;
+        const needed = () => (optional ? undefined : fail(at, `${field.label} is needed.`));
 
         // A checkbox answers "no" by staying unticked, so it is never missing.
         if (field.kind === "checkbox") {
@@ -252,19 +256,35 @@ export const presentSiteVisit = (visit, { request, siteAddress, photos = [], inc
     updatedAt: visit.updatedAt,
 });
 
+/** The customer as the crew member needs to greet them — a name, nothing more. */
+const customerNameOf = (opportunity) => {
+    if (!opportunity) return null;
+    const person = [opportunity.customerFirstName, opportunity.customerLastName].filter(Boolean).join(" ");
+    return opportunity.customerTradingName || opportunity.customerLegalName || person || null;
+};
+
 /**
  * Everything an unauthenticated holder of the link is shown: what they were
- * asked to do and where, and what they have uploaded so far. Deliberately no
- * customer, no opportunity, no other job data, and not the answers once sent.
+ * asked to do and where, the job details the inspection form (CL-04) heads
+ * itself with — customer name, job and quote number, who was assigned — and
+ * what they have uploaded so far. Never the customer's contact details, other
+ * job data, or the answers once sent.
  */
-export const presentPublicTask = (visit, request, opportunity, photos = []) => ({
+export const presentPublicTask = (visit, request, opportunity, photos = [], { quoteNumber = null, sitePhotosKey = null } = {}) => ({
     status: visit.status,
     submittedAt: visit.submittedAt ?? null,
     title: request.title,
     description: request.description ?? null,
     siteAddress: siteAddressOf(opportunity),
+    customerName: customerNameOf(opportunity),
+    jobNumber: opportunity?.number ?? null,
+    quoteNumber,
     scheduledFor: request.scheduledFor ?? null,
     assigneeName: visit.assigneeName ?? null,
+    // The crew member came from the directory or with contact details, so the
+    // form need not ask how to reach them.
+    contactKnown: Boolean(visit.assigneeId || visit.assigneeEmail || visit.assigneePhone),
+    sitePhotosKey,
     requestedFields: asList(visit.requestedFields),
     requestedDocuments: asList(visit.requestedDocuments),
     photos: photos.map((photo) => ({

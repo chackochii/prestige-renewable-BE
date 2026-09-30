@@ -18,6 +18,7 @@ import storage from "../../../utils/storage.js";
 import { parseId } from "../../../utils/ids.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { MIME_BY_EXTENSION, extensionOf } from "../../opportunity/service/leadAttachmentService.js";
+import { SITE_PHOTOS_KEY, fieldsToCheck } from "./inspectionForm.js";
 import {
     assertAssignable,
     assertReadable,
@@ -39,7 +40,7 @@ import {
     sanitizeSubmission,
 } from "./siteVisitShape.js";
 
-const { CollaborationSiteVisit, CollaborationAttachment, CollaborationRequest, Opportunity } = db;
+const { CollaborationSiteVisit, CollaborationAttachment, CollaborationRequest, Opportunity, Quote } = db;
 
 const httpError = (status, message, errors) => Object.assign(new Error(message), { status, ...(errors ? { errors } : {}) });
 
@@ -164,7 +165,19 @@ const loadByToken = async (token) => {
             {
                 model: Opportunity,
                 as: "opportunity",
-                attributes: ["id", "number", "businessUnitId", "siteLine1", "siteSuburb", "siteState", "sitePostcode"],
+                attributes: [
+                    "id",
+                    "number",
+                    "businessUnitId",
+                    "siteLine1",
+                    "siteSuburb",
+                    "siteState",
+                    "sitePostcode",
+                    "customerLegalName",
+                    "customerTradingName",
+                    "customerFirstName",
+                    "customerLastName",
+                ],
             },
         ],
     });
@@ -178,10 +191,16 @@ const photosOf = (request) =>
         order: [["createdAt", "ASC"], ["id", "ASC"]],
     });
 
+/** The public view with the job details the inspection form heads itself with. */
+const presentPublic = async (visit, request, photos) => {
+    const quote = request.opportunity ? await Quote.findOne({ where: { opportunityId: request.opportunity.id }, attributes: ["quoteNumber"] }) : null;
+    return presentPublicTask(visit, request, request.opportunity, photos, { quoteNumber: quote?.quoteNumber ?? null, sitePhotosKey: SITE_PHOTOS_KEY });
+};
+
 /** What the person attending has been asked for. */
 export const getPublicTask = async (token) => {
     const { visit, request } = await loadByToken(token);
-    return presentPublicTask(visit, request, request.opportunity, await photosOf(request));
+    return presentPublic(visit, request, await photosOf(request));
 };
 
 /**
@@ -193,8 +212,14 @@ export const submitPublicTask = async (token, body) => {
     const { visit, request } = await loadByToken(token);
     if (visit.status === "submitted") throw httpError(409, "This form has already been submitted. Thank you.");
 
-    const { clean, errors } = sanitizeSubmission(body, visit.requestedFields);
+    // The whole inspection form (CL-04), with what was asked for required.
+    const { clean, errors } = sanitizeSubmission(body, fieldsToCheck(visit.requestedFields), {
+        contactRequired: !(visit.assigneeId || visit.assigneeEmail || visit.assigneePhone),
+    });
     if (errors.length) throw httpError(400, errors[0].message, errors);
+    // Filled in by the form itself, never typed: who signed, and the day it was sent.
+    clean.fields.signedBy = clean.name;
+    clean.fields.submittedOn = new Date().toISOString().slice(0, 10);
 
     const submittedAt = new Date();
     await visit.update({ status: "submitted", submittedAt, response: clean });
@@ -215,7 +240,7 @@ export const submitPublicTask = async (token, body) => {
         opportunity: request.opportunity,
     });
 
-    return presentPublicTask(visit, request, request.opportunity, photos);
+    return presentPublic(visit, request, photos);
 };
 
 /**
@@ -229,7 +254,13 @@ export const uploadPublicPhoto = async (token, file, documentKey) => {
     if (visit.status === "submitted") throw httpError(409, "This form has been submitted — no more files can be added.");
     if (!file) throw httpError(400, 'Attach a file in the "file" field');
 
-    const slot = (Array.isArray(visit.requestedDocuments) ? visit.requestedDocuments : []).find((doc) => doc.key === documentKey);
+    // The inspection form's own "additional site photos" slot is always there;
+    // a file sent without a slot goes into it.
+    const key = documentKey ? String(documentKey) : SITE_PHOTOS_KEY;
+    const slot =
+        key === SITE_PHOTOS_KEY
+            ? { key: SITE_PHOTOS_KEY, label: "Site photos", type: "image" }
+            : (Array.isArray(visit.requestedDocuments) ? visit.requestedDocuments : []).find((doc) => doc.key === key);
     if (!slot) throw httpError(400, "Upload against one of the photos or documents the form asks for");
 
     const extension = extensionOf(file.originalname);
@@ -241,9 +272,9 @@ export const uploadPublicPhoto = async (token, file, documentKey) => {
     if (already >= MAX_PHOTOS_PER_VISIT) throw httpError(400, `This form already holds ${MAX_PHOTOS_PER_VISIT} files — that is the most it takes`);
 
     const safe = path.basename(String(file.originalname || "file")).replace(/[^\w.\-]+/g, "_").slice(0, 80) || "file";
-    const key = `collaboration/${request.id}/site-visit/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safe}`;
+    const storageKey = `collaboration/${request.id}/site-visit/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safe}`;
     const mime = MIME_BY_EXTENSION[extension] || "application/octet-stream";
-    await storage.put(key, file.buffer, { contentType: mime });
+    await storage.put(storageKey, file.buffer, { contentType: mime });
 
     const photo = await CollaborationAttachment.create({
         requestId: request.id,
@@ -252,7 +283,7 @@ export const uploadPublicPhoto = async (token, file, documentKey) => {
         filename: String(file.originalname).slice(0, 255),
         mime,
         size: file.size,
-        storageKey: key,
+        storageKey,
         uploaderId: null,
     });
 

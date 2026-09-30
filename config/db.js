@@ -9,7 +9,8 @@ export const sequelize = new Sequelize(dbConfig.database, dbConfig.username, dbC
 export const connectDB = async () => {
     try {
         await sequelize.authenticate();
-        console.log(`✅ PostgreSQL connected: ${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
+        // console.log(`✅ PostgreSQL connected: ${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
+        console.log(`✅ PostgreSQL connected: ${dbConfig.port}/${dbConfig.database}`);
     } catch (error) {
         console.error(`❌ PostgreSQL connection failed: ${error.message}`);
         process.exit(1);
