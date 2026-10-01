@@ -1,6 +1,8 @@
 export const PROPOSAL_STATUSES = ["draft", "pending_director", "issued", "presented", "negotiation", "accepted", "rejected", "re-estimated", "withdrawn"];
 /** Still waiting on the customer: the link works and can be answered. */
 export const OPEN_STATUSES = ["issued", "presented"];
+/** Can still change: waiting on the customer, or back with sales to revise. */
+export const LIVE_STATUSES = [...OPEN_STATUSES, "negotiation"];
 export const PROPOSAL_RESPONSES = ["accepted", "rejected", "renegotiate"];
 
 export default (sequelize, DataTypes) => {
@@ -17,8 +19,10 @@ export default (sequelize, DataTypes) => {
                 allowNull: false,
                 defaultValue: "draft",
                 // issued = emailed to the customer, presented = opened by them,
-                // negotiation = they asked for changes, withdrawn = replaced by
-                // a newer proposal before they answered.
+                // negotiation = they asked for changes, re-estimated = sales
+                // sent the job back to estimation for a re-quote (see
+                // requoteService), withdrawn = replaced by a newer proposal
+                // before they answered.
                 validate: { isIn: [PROPOSAL_STATUSES] },
             },
             priceEx: { type: DataTypes.DECIMAL(14, 2) },

@@ -103,6 +103,12 @@ router.post("/:id/proposals", write, proposals.send); // { quoteVersionId, to?, 
 router.post("/:id/proposals/:proposalId/resend", write, proposals.resend); // { to? } → { proposal, link }; the old link stops working
 router.post("/:id/proposals/:proposalId/outcome", write, proposals.outcome); // { outcome: accepted|rejected|renegotiate, note?, customerName? } → { proposal, opportunity }
 
+// Re-quotes: the customer asked for changes, so sales sends the job back to
+// the estimator with the customer's message and their own comments. The job
+// returns through estimation's hand-over (POST /:id/estimation/handover).
+router.get("/:id/requotes", readAny, proposals.listRequotes); // → rounds, newest first
+router.post("/:id/requotes", write, proposals.requestRequote); // { comments, estimatorId?, customerMessage?, customerName? } → { requote, opportunity } (now at stage 2)
+
 // Job history: notes people add plus system events (assignments, notifications).
 router.get("/:id/history", readAny, getHistory);
 router.post("/:id/history", requireAnyPermission("leads.update", "estimation.update"), createHistoryEntry); // { note }

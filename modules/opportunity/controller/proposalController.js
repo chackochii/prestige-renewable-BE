@@ -3,6 +3,8 @@
 // proposalService decides what it opens).
 
 import * as proposals from "../service/proposalService.js";
+import * as requotes from "../service/requoteService.js";
+import { getOpportunity } from "../service/opportunityService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse } from "../../../utils/apiResponse.js";
 
@@ -37,6 +39,18 @@ export const resend = asyncHandler(async (req, res) => {
 
 export const outcome = asyncHandler(async (req, res) => {
     successResponse(res, { data: await proposals.recordOutcome(req.params.id, req.params.proposalId, req.body, req.user) });
+});
+
+// ---- Re-quotes: the customer wants changes, so the job goes back to the estimator ----
+
+export const listRequotes = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await requotes.listRequotes(req.params.id) });
+});
+
+/** The job has moved back to estimation, so the refreshed record comes with the round. */
+export const requestRequote = asyncHandler(async (req, res) => {
+    const requote = await requotes.requestRequote(req.params.id, req.body, req.user);
+    successResponse(res, { data: { requote, opportunity: await getOpportunity(req.params.id) } }, 201);
 });
 
 // ---- Public ----

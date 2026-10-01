@@ -234,6 +234,12 @@ export default (sequelize, DataTypes) => {
             leadEditedAt: { type: DataTypes.DATE },
             leadChangeSummary: { type: DataTypes.TEXT },
             leadChangeAcknowledgedAt: { type: DataTypes.DATE },
+
+            // ---- Re-quote (stage 3 → 2) ----------------------------------------
+            // Set while a requote_requests row is open — the customer asked for
+            // changes and the job is back with the estimator — so lists and the
+            // board can flag it without a join. Cleared when the round completes.
+            requoteRequestedAt: { type: DataTypes.DATE },
         },
         {
             tableName: "opportunities",
@@ -263,6 +269,7 @@ export default (sequelize, DataTypes) => {
 
         Opportunity.hasMany(db.Estimate, { foreignKey: "opportunityId", as: "estimates" });
         Opportunity.hasMany(db.Proposal, { foreignKey: "opportunityId", as: "proposals" });
+        Opportunity.hasMany(db.RequoteRequest, { foreignKey: "opportunityId", as: "requotes" });
         Opportunity.hasMany(db.Variation, { foreignKey: "opportunityId", as: "variations" });
         Opportunity.hasMany(db.Approval, { foreignKey: "opportunityId", as: "approvals" });
         Opportunity.hasMany(db.PurchaseOrder, { foreignKey: "opportunityId", as: "purchaseOrders" });

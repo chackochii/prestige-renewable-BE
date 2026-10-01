@@ -12,6 +12,7 @@ import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
+import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteService.js";
 import { advancePermissionFor, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
@@ -193,6 +194,26 @@ const nextNumber = async (unit, transaction) => {
     return `${prefix}${String(sequence).padStart(4, "0")}`;
 };
 
+/**
+ * The condition behind the search box — job number, customer or suburb — or
+ * null for a blank search. Shared with the proposals board, which lists
+ * opportunities of its own.
+ */
+export const searchCondition = (search) => {
+    if (!search || !String(search).trim()) return null;
+    // % and _ are wildcards in LIKE: escaped so a search for "50%" means
+    // the characters, not "anything".
+    const term = `%${String(search).trim().replace(/[\\%_]/g, "\\$&")}%`;
+    return {
+        [Op.or]: [
+            { number: { [Op.iLike]: term } },
+            { customerLegalName: { [Op.iLike]: term } },
+            { customerTradingName: { [Op.iLike]: term } },
+            { siteSuburb: { [Op.iLike]: term } },
+        ],
+    };
+};
+
 export const listOpportunities = async ({
     businessUnitId,
     stage,
@@ -226,19 +247,8 @@ export const listOpportunities = async ({
     // Search and owner each need their own OR, so they are combined under AND
     // rather than both writing to where[Op.or] and the second winning.
     const conditions = [];
-    if (search && String(search).trim()) {
-        // % and _ are wildcards in LIKE: escaped so a search for "50%" means
-        // the characters, not "anything".
-        const term = `%${String(search).trim().replace(/[\\%_]/g, "\\$&")}%`;
-        conditions.push({
-            [Op.or]: [
-                { number: { [Op.iLike]: term } },
-                { customerLegalName: { [Op.iLike]: term } },
-                { customerTradingName: { [Op.iLike]: term } },
-                { siteSuburb: { [Op.iLike]: term } },
-            ],
-        });
-    }
+    const matching = searchCondition(search);
+    if (matching) conditions.push(matching);
     // The board's owner filter: whoever is carrying the record, which is the
     // salesperson once one is assigned and the capturer before that.
     if (ownerId) {
@@ -258,8 +268,11 @@ export const listOpportunities = async ({
     return { rows, total: count, page: currentPage, pageSize: limit };
 };
 
-// The detail payload: the record, its people, and its documents (with the
-// download URL each — see leadAttachmentService.presentDocument).
+// The detail payload: the record, its people, its documents (with the
+// download URL each — see leadAttachmentService.presentDocument) and the
+// re-quote round currently with the estimator, if any (`requote`, see
+// requoteService) — joined here rather than fetched separately, since every
+// stage screen reads this payload.
 export const getOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"), {
         include: [
@@ -274,12 +287,16 @@ export const getOpportunity = async (id) => {
                 as: "documents",
                 include: [{ model: User, as: "uploader", attributes: ["id", "name"] }],
             },
+            // At most one round is open at a time, so this never multiplies rows.
+            { model: db.RequoteRequest, as: "requotes", where: { status: "open" }, required: false, include: REQUOTE_INCLUDE },
         ],
         order: [[{ model: Document, as: "documents" }, "createdAt", "DESC"]],
     });
     if (!opportunity) throw httpError(404, "Opportunity not found");
     const plain = opportunity.get({ plain: true });
     plain.documents = (plain.documents || []).map(presentDocument);
+    plain.requote = plain.requotes?.length ? presentRequote(plain.requotes[0]) : null;
+    delete plain.requotes;
     return plain;
 };
 
@@ -479,7 +496,14 @@ export const advanceStage = async (id, actor, message = {}) => {
         if (!accepted) throw httpError(400, "The customer has not accepted a proposal yet");
     }
 
-    return moveToNextStage(opportunity, actor, message);
+    const from = opportunity.stage;
+    const moved = await moveToNextStage(opportunity, actor, message);
+    // A job sent back for a re-quote returns to proposal through here (the
+    // hand-over step, or a plain move): that completes the round. The
+    // hand-over names the revised version and the estimator's note in
+    // message.requote; a plain move takes the newest version.
+    if (from === 2 && (await completeOpenRequote(opportunity, actor, message.requote ?? {}))) return getOpportunity(opportunity.id);
+    return moved;
 };
 
 /**

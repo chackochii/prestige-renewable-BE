@@ -9,9 +9,10 @@
 //   public — the link opens the proposal: the PDF is rebuilt in the browser
 //            from the quote version's snapshot, exactly as it was sent. The
 //            customer accepts (the job moves on to the next stage — Approvals),
-//            asks to renegotiate (sales revises and sends a new version), or
-//            declines. Each answer notifies the people on the job and lands in
-//            the job's history.
+//            asks to renegotiate (sales sends the job back to the estimator
+//            for a re-quote — requoteService — and then sends the revised
+//            version), or declines. Each answer notifies the people on the job
+//            and lands in the job's history.
 //
 // The link's token is handed back once, in the send response, and only its
 // SHA-256 is stored. Resending a proposal issues a new token, so a lost email
@@ -21,43 +22,28 @@ import crypto from "node:crypto";
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
+import { multiLine, oneLine } from "../../../utils/text.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { recordSystemEvent } from "./leadWorkflowService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
-import { getOpportunity, listOpportunities, moveToNextStage } from "./opportunityService.js";
+import { getOpportunity, listOpportunities, moveToNextStage, searchCondition } from "./opportunityService.js";
+import { REQUOTE_INCLUDE, presentRequote } from "./requoteService.js";
 import { readableStages } from "./stageAccess.js";
-import { OPEN_STATUSES } from "../model/proposal.js";
+import { LIVE_STATUSES, OPEN_STATUSES } from "../model/proposal.js";
 
-const { Opportunity, Proposal, QuoteVersion, BusinessUnit, User, sequelize } = db;
+const { Opportunity, Proposal, QuoteVersion, RequoteRequest, BusinessUnit, User, sequelize } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 /** How long a link can be answered — the same 30 days the quote is valid for. */
 export const LINK_DAYS = 30;
 const PROPOSAL_STAGE = 3;
-/** Proposals that can still change: waiting on the customer, or back with sales to revise. */
-const LIVE_STATUSES = [...OPEN_STATUSES, "negotiation"];
 
 // ---- Small helpers ----------------------------------------------------------
 
 const newToken = () => crypto.randomBytes(24).toString("base64url");
 const hashToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 const isWellFormedToken = (token) => typeof token === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(token);
-
-// Control characters never belong in what someone types; newlines survive in
-// the longer fields.
-const oneLine = (value, max) =>
-    String(value ?? "")
-        .replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\uFEFF]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, max);
-const multiLine = (value, max) =>
-    String(value ?? "")
-        .replace(/\r\n?/g, "\n")
-        .replace(/[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060\uFEFF]/g, "")
-        .trim()
-        .slice(0, max);
 
 const EMAIL_RE = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 const isEmail = (value) => typeof value === "string" && value.length <= 254 && EMAIL_RE.test(value);
@@ -279,8 +265,8 @@ const applyResponse = async (opportunity, proposal, { decision, name, note, chan
             decision === "accepted"
                 ? `${customerLabel(opportunity)} accepted ${proposal.number} (${money(proposal.grandTotal)}). The job moves on to Approvals.`
                 : decision === "renegotiate"
-                  ? `${customerLabel(opportunity)} wants changes to ${proposal.number}${said}. Revise the quote and send a new proposal.`
-                  : `${customerLabel(opportunity)} declined ${proposal.number}${said}. Send a revised proposal or mark the job lost.`,
+                  ? `${customerLabel(opportunity)} wants changes to ${proposal.number}${said}. Review what they asked for and send the job to the estimator for a re-quote.`
+                  : `${customerLabel(opportunity)} declined ${proposal.number}${said}. Send it for a re-quote, send a revised proposal, or mark the job lost.`,
         userIds: recipientsFor(opportunity, proposal),
         opportunity,
         actor,
@@ -309,9 +295,10 @@ export const recordOutcome = async (id, proposalId, payload = {}, actor) => {
 
 /**
  * The proposals page: every active job at the proposal stage with its latest
- * proposal and latest saved quote, plus proposals answered in the last 30
- * days on jobs the person can still see — so an acceptance does not vanish
- * the moment the job moves on.
+ * proposal and latest saved quote; jobs sent back to the estimator for a
+ * re-quote (so they do not vanish from sales' view while they are away); and
+ * proposals answered in the last 30 days on jobs the person can still see —
+ * so an acceptance does not vanish the moment the job moves on.
  */
 export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
     const { rows: open } = await listOpportunities(
@@ -321,40 +308,46 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
 
     const since = new Date(Date.now() - 30 * 86400000);
     const allowed = await readableStages(actor);
-    const answered = await Proposal.findAll({
-        where: { respondedAt: { [Op.gte]: since }, status: { [Op.in]: ["accepted", "rejected"] } },
-        include: [
-            {
-                model: Opportunity,
-                as: "opportunity",
-                required: true,
-                where: {
-                    businessUnitId: parseId(businessUnitId, "business unit id"),
-                    stage: { [Op.in]: allowed.length ? allowed : [0] },
-                },
+    const unitId = parseId(businessUnitId, "business unit id");
+    const stages = { [Op.in]: allowed.length ? allowed : [0] };
+    const [answered, requoting] = await Promise.all([
+        Proposal.findAll({
+            where: { respondedAt: { [Op.gte]: since }, status: { [Op.in]: ["accepted", "rejected"] } },
+            include: [{ model: Opportunity, as: "opportunity", required: true, where: { businessUnitId: unitId, stage: stages } }],
+            order: [["respondedAt", "DESC"]],
+            limit: 100,
+        }),
+        // With the estimator: back at stage 2 until the revised quote returns.
+        Opportunity.findAll({
+            where: {
+                businessUnitId: unitId,
+                lifecycle: "Active",
+                requoteRequestedAt: { [Op.ne]: null },
+                stage: stages,
+                ...(searchCondition(search) ? { [Op.and]: [searchCondition(search)] } : {}),
             },
-        ],
-        order: [["respondedAt", "DESC"]],
-        limit: 100,
-    });
+            order: [["updatedAt", "DESC"]],
+            limit: 200,
+        }),
+    ]);
 
     const opportunities = new Map();
     for (const opportunity of open) opportunities.set(opportunity.id, opportunity);
+    for (const opportunity of requoting) if (!opportunities.has(opportunity.id)) opportunities.set(opportunity.id, opportunity);
     for (const proposal of answered) if (!opportunities.has(proposal.opportunityId)) opportunities.set(proposal.opportunityId, proposal.opportunity);
     const ids = [...opportunities.keys()];
     if (!ids.length) return [];
 
-    const [proposals, versions, people] = await Promise.all([
+    const peopleIds = [...new Set([...opportunities.values()].flatMap((o) => [o.salespersonId, o.estimatorId]).filter(Boolean))];
+    const [proposals, versions, requotes, people] = await Promise.all([
         Proposal.findAll({ where: { opportunityId: { [Op.in]: ids } }, include: staffInclude(), order: [["version", "DESC"]] }),
         QuoteVersion.findAll({
             where: { opportunityId: { [Op.in]: ids } },
             attributes: ["id", "opportunityId", "version", "quoteNumber", "grandTotal", "createdAt"],
             order: [["version", "DESC"], ["id", "DESC"]],
         }),
-        User.findAll({
-            where: { id: { [Op.in]: [...new Set([...opportunities.values()].map((o) => o.salespersonId).filter(Boolean))] } },
-            attributes: ["id", "name"],
-        }),
+        RequoteRequest.findAll({ where: { opportunityId: { [Op.in]: ids } }, include: REQUOTE_INCLUDE, order: [["round", "DESC"], ["id", "DESC"]] }),
+        User.findAll({ where: { id: { [Op.in]: peopleIds } }, attributes: ["id", "name"] }),
     ]);
     const firstBy = (list) => {
         const map = new Map();
@@ -363,14 +356,17 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
     };
     const latestProposal = firstBy(proposals);
     const latestVersion = firstBy(versions);
+    const latestRequote = firstBy(requotes);
     const counts = new Map();
     for (const row of proposals) counts.set(row.opportunityId, (counts.get(row.opportunityId) ?? 0) + 1);
     const names = new Map(people.map((user) => [user.id, user.name]));
+    const person = (id) => (id ? { id, name: names.get(id) ?? null } : null);
 
     return ids.map((oppId) => {
         const opportunity = opportunities.get(oppId);
         const version = latestVersion.get(oppId);
         const proposal = latestProposal.get(oppId);
+        const requote = latestRequote.get(oppId);
         return {
             opportunity: {
                 id: opportunity.id,
@@ -382,7 +378,10 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
                 customerLastName: opportunity.customerLastName,
                 customerEmail: opportunity.customerEmail,
                 siteSuburb: opportunity.siteSuburb,
-                salesperson: opportunity.salespersonId ? { id: opportunity.salespersonId, name: names.get(opportunity.salespersonId) ?? null } : null,
+                salesperson: person(opportunity.salespersonId),
+                estimator: person(opportunity.estimatorId),
+                estimatorId: opportunity.estimatorId,
+                requoteRequestedAt: opportunity.requoteRequestedAt,
                 updatedAt: opportunity.updatedAt,
             },
             latestQuoteVersion: version
@@ -390,6 +389,8 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
                 : null,
             proposal: proposal ? presentProposal(proposal) : null,
             proposalCount: counts.get(oppId) ?? 0,
+            // The latest round of re-quoting, open or completed.
+            requote: requote ? presentRequote(requote) : null,
         };
     });
 };
@@ -413,7 +414,7 @@ const loadByToken = async (token) => {
 /** What the customer's page shows, and whether they can still answer. */
 const publicState = (proposal) => {
     if (OPEN_STATUSES.includes(proposal.status)) return isExpired(proposal) ? "expired" : "open";
-    return proposal.status; // accepted | rejected | negotiation | withdrawn
+    return proposal.status; // accepted | rejected | negotiation | re-estimated (being re-quoted) | withdrawn
 };
 
 /**
@@ -477,6 +478,7 @@ export const respondToProposal = async (token, payload = {}, { ip } = {}) => {
     const { proposal, opportunity } = await loadByToken(token);
     const state = publicState(proposal);
     if (state === "expired") throw httpError(410, "This proposal has expired. Please contact us for an updated one.");
+    if (state === "re-estimated") throw httpError(409, "This proposal is being revised — we will send you an updated one.");
     if (state !== "open") throw httpError(409, "This proposal has already been answered.");
 
     const decision = DECISIONS[String(payload.decision ?? "")];

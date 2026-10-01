@@ -20,6 +20,10 @@ export const NOTIFICATION_EVENTS = {
     "lead.changed": { label: "Lead details changed after handover", priority: "high" },
     "estimation.inputs.accepted": { label: "Estimation accepted the lead inputs", priority: "medium" },
     "estimation.handover": { label: "Quote ready — send the proposal", priority: "high" },
+    // The customer asked for changes: sales sends the job back for a re-quote
+    // and estimation returns the revised quote (modules/opportunity/service/requoteService).
+    "estimation.requote.requested": { label: "Re-quote requested — customer wants changes", priority: "high" },
+    "estimation.requote.completed": { label: "Revised quote ready — send the new proposal", priority: "high" },
 
     // Cross-department requests and assignments (modules/collaboration).
     "request.created": { label: "Request or assignment for you", priority: "high" },

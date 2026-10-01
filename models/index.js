@@ -23,6 +23,7 @@ import defineCatalogItem from "../modules/catalog/model/catalogItem.js";
 import defineEstimate from "../modules/opportunity/model/estimate.js";
 import defineEstimateOption from "../modules/opportunity/model/estimateOption.js";
 import defineProposal from "../modules/opportunity/model/proposal.js";
+import defineRequoteRequest from "../modules/opportunity/model/requoteRequest.js";
 import defineVariation from "../modules/opportunity/model/variation.js";
 import defineApproval from "../modules/opportunity/model/approval.js";
 import definePurchaseOrder from "../modules/opportunity/model/purchaseOrder.js";
@@ -68,6 +69,7 @@ db.InboundLead = defineInboundLead(sequelize, DataTypes);
 db.Estimate = defineEstimate(sequelize, DataTypes);
 db.EstimateOption = defineEstimateOption(sequelize, DataTypes);
 db.Proposal = defineProposal(sequelize, DataTypes);
+db.RequoteRequest = defineRequoteRequest(sequelize, DataTypes);
 db.Variation = defineVariation(sequelize, DataTypes);
 
 // Delivery
@@ -116,6 +118,7 @@ export const {
     Estimate,
     EstimateOption,
     Proposal,
+    RequoteRequest,
     Variation,
     Approval,
     PurchaseOrder,

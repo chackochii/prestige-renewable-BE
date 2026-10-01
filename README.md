@@ -248,6 +248,25 @@ Notes:
 - **Unit scoping** is deny-by-default as everywhere else: a request outside the caller's business units answers 404, and a `businessUnitId` outside them answers 403.
 - **Every step is audited** in `collaboration_events` (the history tab) and notifies whoever is now waiting — see the events below.
 
+## Proposal (stage 3) & re-quotes
+
+Sales sends the customer a link to a saved quote version (`POST /:id/proposals`); the server sends no email — the rep sends it from their own email app. The customer accepts (the job moves on to Approvals), asks for changes, or declines through `/api/public/proposals/:token`. Sales work needs `leads.update`; reads accept `leads.read` or `estimation.read`. See `modules/opportunity/service/proposalService.js`.
+
+**When the customer wants changes** the job goes back to the estimator for a re-quote (`requoteService.js`, table `requote_requests`, one row per round):
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `GET` | `/api/opportunities/proposals?businessUnitId=` | the proposals board: stage-3 jobs, jobs away for a re-quote, and proposals answered in the last 30 days → `[{ opportunity, latestQuoteVersion, proposal, proposalCount, requote }]` |
+| `GET` | `/api/opportunities/:id/proposals` | proposals on the job, newest first |
+| `POST` | `/api/opportunities/:id/proposals` | `{ quoteVersionId, to?, subject?, message? }` → `{ proposal, link }` (the link is returned once) |
+| `POST` | `/api/opportunities/:id/proposals/:proposalId/resend` | `{ to? }` → `{ proposal, link }` — a new link; the old one stops working |
+| `POST` | `/api/opportunities/:id/proposals/:proposalId/outcome` | `{ outcome: accepted\|rejected\|renegotiate, note?, customerName? }` — an answer given by phone → `{ proposal, opportunity }` |
+| `GET` | `/api/opportunities/:id/requotes` | re-quote rounds, newest first |
+| `POST` | `/api/opportunities/:id/requotes` | `{ comments, estimatorId?, customerMessage?, customerName? }` → `{ requote, opportunity }` — the job moves back to **stage 2**, the estimator (the job's, unless `estimatorId` names another) is assigned and notified (`estimation.requote.requested`), and any proposal still live becomes `re-estimated` so the customer's link stops accepting answers |
+| `POST` | `/api/opportunities/:id/estimation/handover` | `{ quoteVersionId?, note }` — on a re-quote the note (what changed) is **required**; the round is completed with the revised version and sales is notified (`estimation.requote.completed`) |
+
+The customer's message is theirs: when they answered the latest proposal (renegotiate or decline, with a note) that note is carried over word for word with who and when (`customerChannel`: `customer` through the link, `staff` recorded after a call); `customerMessage` in the body only counts when there is no recorded answer. A plain `POST /:id/advance` out of stage 2 completes an open round too, on the newest saved version. The open round rides on every opportunity payload as `requote`, and `opportunities.requote_requested_at` flags it for lists and the board.
+
 ## Notifications
 
 Every in-app notice goes through one function — `notify()` in `modules/notification/service/notificationService.js`. Give it an event key, a title and who to tell (named user ids and/or every holder of a role in the unit); it resolves the priority, writes the rows and pushes them to any browser the recipients have open. The person who caused the event is never notified of their own action unless the caller passes `includeActor`.
