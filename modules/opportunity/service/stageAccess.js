@@ -34,6 +34,8 @@ export const STAGE_VIEW_PERMISSION = {
     7: "construction.read",
     8: "invoicing.read",
     9: "warranty.read",
+    10: "leads.read", // referrals & feedback — sales captures the review and any referral
+    11: "warranty.read", // defects liability and O&M period
 };
 
 /** Stage number → the permission needed to move a record out of it. */
@@ -46,8 +48,15 @@ export const STAGE_ADVANCE_PERMISSION = {
     6: "procurement.update", // purchase orders placed, deliveries confirmed
     7: "construction.update", // site works installed and commissioned
     8: "invoicing.update", // milestone billing reconciled
-    9: "warranty.update", // handover pack completed
+    9: "warranty.update", // warranty certificates issued and logged
+    10: "leads.update", // the client's review and any referral captured
+    11: "warranty.update", // defects liability and maintenance period closed out
 };
+
+/** The pipeline runs 1–11 (prestige-fe constants/stages.js); numbers are never reused. */
+export const FIRST_STAGE = 1;
+export const LAST_STAGE = 11;
+export const isStageNumber = (value) => Number.isInteger(value) && value >= FIRST_STAGE && value <= LAST_STAGE;
 
 /**
  * Stages no longer in the pipeline. Stage 4 (Sales closure) was folded into
@@ -58,17 +67,19 @@ export const STAGE_ADVANCE_PERMISSION = {
  */
 export const RETIRED_STAGES = [4];
 
-/** Short stage names, so a refusal says "out of Billing" rather than "out of stage 8". */
+/** Stage names as the process chart has them, so a refusal says "out of Invoicing" rather than "out of stage 8". */
 export const STAGE_LABELS = {
-    1: "Lead capture",
+    1: "Leads & marketing",
     2: "Estimation",
     3: "Proposal",
     4: "Sales closure",
     5: "Approvals",
-    6: "Procurement",
-    7: "Site works",
-    8: "Billing",
-    9: "Handover",
+    6: "Procurement & delivery",
+    7: "Construction",
+    8: "Invoicing & payments",
+    9: "Warranty registration",
+    10: "Referrals & feedback",
+    11: "DLP / O&M",
 };
 
 /**

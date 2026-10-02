@@ -12,6 +12,7 @@ import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { signDownloadToken } from "../../../utils/jwt.js";
 import storage from "../../../utils/storage.js";
+import { isStageNumber, LAST_STAGE } from "./stageAccess.js";
 
 const { Opportunity, Document, User } = db;
 
@@ -218,7 +219,7 @@ export const addDocuments = async (id, files = [], meta = {}, actor) => {
     let stage = null;
     if (meta.stage !== undefined && meta.stage !== "" && meta.stage !== null) {
         stage = Number(meta.stage);
-        if (!Number.isInteger(stage) || stage < 1 || stage > 9) throw httpError(400, "stage must be 1–9");
+        if (!isStageNumber(stage)) throw httpError(400, `stage must be 1–${LAST_STAGE}`);
     }
     const label = meta.label ? String(meta.label).slice(0, 50) : null;
 

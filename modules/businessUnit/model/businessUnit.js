@@ -35,11 +35,11 @@ export default (sequelize, DataTypes) => {
                     { key: "lead_full_sales", label: "Lead + full sales", rate: 0.05 },
                 ],
             },
-            // SLA days per pipeline stage 1–9 plus the approvals window
+            // SLA days per pipeline stage 1–11 plus the approvals window
             slaDays: {
                 type: DataTypes.JSONB,
                 allowNull: false,
-                defaultValue: { 1: 3, 2: 5, 3: 7, 4: 10, 5: 15, 6: 10, 7: 20, 8: 7, 9: 5, approval: 15 },
+                defaultValue: { 1: 3, 2: 5, 3: 7, 4: 10, 5: 15, 6: 10, 7: 20, 8: 7, 9: 5, 10: 14, 11: 365, approval: 15 },
             },
             // Per-unit notification priority overrides: { "<event key>": "high" }.
             // Events not named here keep the default in notificationEvents.js.
@@ -48,12 +48,12 @@ export default (sequelize, DataTypes) => {
                 allowNull: false,
                 defaultValue: {},
             },
-            // Pipeline stages this unit uses. Numbers stay stable (1–9); disabled
+            // Pipeline stages this unit uses. Numbers stay stable (1–11); disabled
             // stages are skipped, not renumbered, so slaDays and reporting line up.
             enabledStages: {
                 type: DataTypes.JSONB,
                 allowNull: false,
-                defaultValue: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+                defaultValue: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             },
             // The approvals a job in this unit can need, e.g. [{ key: "da", label: "Council DA" }].
             // Sales or estimation pick from this list per job (opportunities.requiredApprovals)

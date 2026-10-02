@@ -168,7 +168,7 @@ All application code (`server.js`, `app.js`, models, routes) uses `import`/`expo
 | Group | Tables |
 |---|---|
 | Core | `business_units`, `users`, `user_business_units`, `referrers` |
-| Pipeline | `opportunities` (stages 1–9: Lead → Estimation → Proposal → Closure → Approvals → Procurement → Site works → Billing → Handover) |
+| Pipeline | `opportunities` (stages 1–11: Leads & marketing → Estimation → Proposal → (4 retired) → Approvals → Procurement & delivery → Construction → Invoicing & payments → Warranty registration → Referrals & feedback → DLP / O&M; see `stageAccess.js`) |
 | Quoting | `estimates`, `estimate_options`, `proposals`, `variations` |
 | Delivery | `approvals`, `purchase_orders`, `site_work_substages`, `rebates` |
 | Billing & system | `billing_requests`, `documents`, `audit_logs`, `notifications` |
@@ -229,7 +229,7 @@ Files supplied against a request live in the Space like any other document (`col
 | Method | Route | Permission | Body → returns |
 |---|---|---|---|
 | `GET` | `/api/opportunities/:id/collaboration/requests` | `leads.read` or `estimation.read` | everything raised against the job |
-| `POST` | `/api/opportunities/:id/collaboration/requests` | `leads.read` or `estimation.read` | `{ kind, department, assigneeId, stage?, title, description?, priority?, dueAt?, requestedFields?, requestedDocuments? }` → the request |
+| `POST` | `/api/opportunities/:id/collaboration/requests` | `leads.read` or `estimation.read` | `{ kind, department, assigneeId, stage?, title, description?, priority?, dueAt?, requestedFields?, requestedDocuments?, inspectionChecklist? }` → the request. `priority`: `required \| preferred \| not_required` for every kind (default `required`; rows from before Oct 2026 may still read `low…urgent`). `requestedFields` on an information request build its response form (`{ key, label, type }`); on a pre-site inspection they are the requester's own items beyond the checklist (`{ key, label, kind }`), which the coordinator carries onto the site-visit form |
 | `GET` | `/api/collaboration/requests` | read | `?businessUnitId=&scope=assigned\|raised\|all&kind=&department=&status=&overdue=&page=&pageSize=` |
 | `GET` | `/api/collaboration/requests/:id` | read | the request with its response, progress, attachments |
 | `GET` | `/api/collaboration/requests/:id/history` | read | `[{ id, action, detail, byName, at }]` |

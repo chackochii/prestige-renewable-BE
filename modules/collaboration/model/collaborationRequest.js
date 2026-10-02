@@ -5,18 +5,24 @@
 
 export const REQUEST_KINDS = ["information", "assignment"];
 export const DEPARTMENTS = ["sales", "operations", "procurement", "finance", "admin"];
-/** How urgent an information request is. */
-export const REQUEST_PRIORITIES = ["low", "medium", "high", "urgent"];
 /**
- * An assignment's priority says whether the activity has to happen at all,
- * not how urgent it is — operations schedules off necessity.
+ * A request's priority says whether the thing has to happen, not how urgent
+ * it is: the team receiving it schedules off necessity. One scale for every
+ * kind, so a list of requests sorts and reads as one list.
  */
-export const ASSIGNMENT_PRIORITIES = ["required", "preferred", "not_required"];
+export const PRIORITIES = ["required", "preferred", "not_required"];
+/**
+ * The urgency scale information requests carried before Oct 2026. Rows
+ * raised then still hold these, so a saved row keeps validating — they are
+ * just not accepted on anything new.
+ */
+export const LEGACY_PRIORITIES = ["low", "medium", "high", "urgent"];
 
-export const prioritiesFor = (kind) => (kind === "assignment" ? ASSIGNMENT_PRIORITIES : REQUEST_PRIORITIES);
+// Kept for callers that ask per kind; both kinds share the one scale now.
+export const prioritiesFor = () => PRIORITIES;
 
 /** What a new request starts on when the requester does not say. */
-export const defaultPriorityFor = (kind) => (kind === "assignment" ? "required" : "medium");
+export const defaultPriorityFor = () => "required";
 
 /** information: pending → responded → under review → accepted. */
 export const INFORMATION_STATUSES = [
@@ -60,17 +66,20 @@ export default (sequelize, DataTypes) => {
             opportunityId: { type: DataTypes.INTEGER, allowNull: false },
             kind: { type: DataTypes.STRING(20), allowNull: false, validate: { isIn: [REQUEST_KINDS] } },
             department: { type: DataTypes.STRING(20), allowNull: false, validate: { isIn: [DEPARTMENTS] } },
-            stage: { type: DataTypes.INTEGER, validate: { min: 1, max: 9 } },
+            stage: { type: DataTypes.INTEGER, validate: { min: 1, max: 11 } }, // stageAccess.LAST_STAGE
             title: { type: DataTypes.STRING(200), allowNull: false, validate: { len: [1, 200] } },
             description: { type: DataTypes.TEXT },
-            // [{ key, label, type }] — the response form is built from this.
+            // Information request: [{ key, label, type }] — the response form is
+            // built from this. Pre-site inspection: [{ key, label, kind }] — what
+            // the requester wrote in themselves beyond the checklist, which the
+            // coordinator carries onto the site member's form.
             requestedFields: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
             // [{ key, label, type, comment }] — the files asked for.
             requestedDocuments: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
             createdById: { type: DataTypes.INTEGER },
             assigneeId: { type: DataTypes.INTEGER },
-            // Checked against its kind's scale by priorityBelongsToKind below.
-            priority: { type: DataTypes.STRING(20), allowNull: false, defaultValue: "medium" },
+            // One of PRIORITIES — or, on a row from before the scale changed, LEGACY_PRIORITIES.
+            priority: { type: DataTypes.STRING(20), allowNull: false, defaultValue: "required" },
             // Pre-site inspection: the checklist items the requester marked as
             // required, which become the site member's form. Keys from
             // prestige-fe/src/constants/inspectionReport.js.
@@ -94,11 +103,9 @@ export default (sequelize, DataTypes) => {
                     if (this.status && !statusesFor(this.kind).includes(this.status))
                         throw new Error(`status "${this.status}" is not valid for a ${this.kind} request`);
                 },
-                priorityBelongsToKind() {
-                    if (this.priority && !prioritiesFor(this.kind).includes(this.priority))
-                        throw new Error(
-                            `priority must be one of: ${prioritiesFor(this.kind).join(", ")} for ${this.kind === "assignment" ? "an assignment" : "an information request"}`
-                        );
+                priorityIsKnown() {
+                    if (this.priority && !PRIORITIES.includes(this.priority) && !LEGACY_PRIORITIES.includes(this.priority))
+                        throw new Error(`priority must be one of: ${PRIORITIES.join(", ")}`);
                 },
             },
             indexes: [

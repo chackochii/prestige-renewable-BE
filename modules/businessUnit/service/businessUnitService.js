@@ -7,6 +7,7 @@ import { disabledPageCodesByUnit } from "../../page/service/pageService.js";
 import { SUPER_ROLE_CODE } from "../../role/service/roleService.js";
 import { PRIORITIES, isEventKey, isPriority } from "../../notification/service/notificationEvents.js";
 import { parseId } from "../../../utils/ids.js";
+import { isStageNumber, LAST_STAGE } from "../../opportunity/service/stageAccess.js";
 
 const { BusinessUnit, UserBusinessUnit, Opportunity } = db;
 
@@ -80,10 +81,10 @@ const validateSiteWorkSubstages = (value) => validateKeyLabelList(value, "siteWo
 
 const validateEnabledStages = (value) => {
     if (!Array.isArray(value) || value.length === 0)
-        throw httpError(400, "enabledStages must be a non-empty array of stage numbers 1-9");
+        throw httpError(400, `enabledStages must be a non-empty array of stage numbers 1-${LAST_STAGE}`);
     const stages = value.map(Number);
-    if (stages.some((s) => !Number.isInteger(s) || s < 1 || s > 9))
-        throw httpError(400, "enabledStages values must be integers between 1 and 9");
+    if (stages.some((s) => !isStageNumber(s)))
+        throw httpError(400, `enabledStages values must be integers between 1 and ${LAST_STAGE}`);
     if (new Set(stages).size !== stages.length) throw httpError(400, "enabledStages contains duplicates");
     return stages.sort((a, b) => a - b);
 };
@@ -92,8 +93,8 @@ const validateSlaDays = (value) => {
     if (!isPlainObject(value)) throw httpError(400, "slaDays must be an object keyed by stage number or 'approval'");
     for (const [key, days] of Object.entries(value)) {
         const stage = Number(key);
-        if (key !== "approval" && (!Number.isInteger(stage) || stage < 1 || stage > 9))
-            throw httpError(400, `slaDays key "${key}" must be a stage number 1-9 or "approval"`);
+        if (key !== "approval" && !isStageNumber(stage))
+            throw httpError(400, `slaDays key "${key}" must be a stage number 1-${LAST_STAGE} or "approval"`);
         if (!Number.isFinite(Number(days)) || Number(days) < 0)
             throw httpError(400, `slaDays["${key}"] must be a non-negative number of days`);
     }

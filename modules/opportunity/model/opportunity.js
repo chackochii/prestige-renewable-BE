@@ -1,6 +1,7 @@
-// Pipeline stages:
-// 1 Lead · 2 Estimation · 3 Proposal · (4 Sales closure — retired, see stageAccess.RETIRED_STAGES) · 5 Approvals
-// 6 Procurement · 7 Site works · 8 Billing · 9 Handover
+// Pipeline stages (see stageAccess.js for the names and who owns each):
+// 1 Leads & marketing · 2 Estimation · 3 Proposal · (4 Sales closure — retired, see stageAccess.RETIRED_STAGES)
+// 5 Approvals · 6 Procurement & delivery · 7 Construction · 8 Invoicing & payments
+// 9 Warranty registration · 10 Referrals & feedback · 11 DLP / O&M
 
 // Lead-checklist option keys. These mirror
 // prestige-fe/src/features/leads/propertyOptions.js — keep them in step, the
@@ -45,7 +46,7 @@ export default (sequelize, DataTypes) => {
             // e.g. PRS-26-0008 — unique among non-deleted rows (partial index opportunities_number_active_uq)
             number: { type: DataTypes.STRING(20), allowNull: false },
             businessUnitId: { type: DataTypes.INTEGER, allowNull: false },
-            stage: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1, validate: { min: 1, max: 9 } },
+            stage: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1, validate: { min: 1, max: 11 } }, // stageAccess.LAST_STAGE
             lifecycle: {
                 type: DataTypes.STRING(20),
                 allowNull: false,

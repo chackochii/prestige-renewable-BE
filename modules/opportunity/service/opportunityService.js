@@ -14,9 +14,9 @@ import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
 // approvalsService imports moveToNextStage from here in turn (the last
 // approval moves the job on); both only call each other at request time.
-import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, sanitizeRequiredApprovals } from "./approvalsService.js";
+import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, installedSystemSummary, sanitizeRequiredApprovals } from "./approvalsService.js";
 import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteService.js";
-import { advancePermissionFor, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
+import { advancePermissionFor, isStageNumber, LAST_STAGE, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -238,8 +238,7 @@ export const listOpportunities = async ({
     const allowed = actor ? await readableStages(actor) : null;
     if (stage) {
         const parsed = Number(stage);
-        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 9)
-            throw httpError(400, "stage must be 1–9");
+        if (!isStageNumber(parsed)) throw httpError(400, `stage must be 1–${LAST_STAGE}`);
         if (allowed && !allowed.includes(parsed))
             throw httpError(403, `Viewing ${STAGE_LABELS[parsed] ?? `stage ${parsed}`} needs ${viewPermissionFor(parsed)}`);
         where.stage = parsed;
@@ -303,6 +302,10 @@ export const getOpportunity = async (id) => {
     plain.documents = (plain.documents || []).map(presentDocument);
     plain.requote = plain.requotes?.length ? presentRequote(plain.requotes[0]) : null;
     delete plain.requotes;
+    // From construction on, the equipment going in as the accepted quote had
+    // it — the warranty registration and DLP stages show it. Earlier stages
+    // read the live quote instead, so the extra query is only paid late.
+    plain.systemSummary = plain.stage >= 7 ? await installedSystemSummary(plain.id) : null;
     return plain;
 };
 
@@ -470,7 +473,7 @@ export const advanceStage = async (id, actor, message = {}) => {
     if (!opportunity) throw httpError(404, "Opportunity not found");
     if (opportunity.lifecycle !== "Active")
         throw httpError(400, "Only active records can advance");
-    if (opportunity.stage >= 9) throw httpError(400, "Already at the final stage");
+    if (opportunity.stage >= LAST_STAGE) throw httpError(400, "Already at the final stage");
 
     // Leaving a stage belongs to the department that owns it, so the check is
     // against the record's current stage rather than one blanket permission —
@@ -540,8 +543,8 @@ export const moveToNextStage = async (opportunity, actor = null, { byline = null
     const enabled = (Array.isArray(unit?.enabledStages) ? unit.enabledStages : []).map(Number);
     let next = opportunity.stage + 1;
     // Retired stages are skipped for every unit, whatever its config says.
-    while (next <= 9 && (RETIRED_STAGES.includes(next) || (enabled.length && !enabled.includes(next)))) next += 1;
-    if (next > 9) throw httpError(400, "No further stage is enabled for this business unit");
+    while (next <= LAST_STAGE && (RETIRED_STAGES.includes(next) || (enabled.length && !enabled.includes(next)))) next += 1;
+    if (next > LAST_STAGE) throw httpError(400, "No further stage is enabled for this business unit");
 
     const slaDays = Number(unit?.slaDays?.[next] ?? 0);
     const now = new Date();

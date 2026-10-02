@@ -23,12 +23,12 @@ import { notify } from "../../notification/service/notificationService.js";
 import { addAttachment as fileOnOpportunity } from "../../opportunity/service/leadAttachmentService.js";
 import {
     DEPARTMENTS,
+    PRIORITIES,
     REQUEST_KINDS,
     defaultPriorityFor,
-    prioritiesFor,
     statusesFor,
 } from "../model/collaborationRequest.js";
-import { cleanChecklistKeys, presentSiteVisit, siteAddressOf } from "./siteVisitShape.js";
+import { cleanChecklistKeys, cleanRequestedFields, presentSiteVisit, siteAddressOf } from "./siteVisitShape.js";
 
 const {
     CollaborationRequest,
@@ -344,11 +344,10 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
         throw httpError(400, `department must be one of: ${DEPARTMENTS.join(", ")}`);
     const title = String(payload.title ?? "").trim();
     if (!title) throw httpError(400, "title is required");
-    // An assignment is prioritised by whether it has to happen at all, an
-    // information request by urgency — each on its own scale.
-    const priorities = prioritiesFor(kind);
-    if (payload.priority && !priorities.includes(payload.priority))
-        throw httpError(400, `priority must be one of: ${priorities.join(", ")}`);
+    // Priority says whether the thing has to happen, not how urgent it is —
+    // one scale for both kinds.
+    if (payload.priority && !PRIORITIES.includes(payload.priority))
+        throw httpError(400, `priority must be one of: ${PRIORITIES.join(", ")}`);
 
     const draft = CollaborationRequest.build({
         businessUnitId: opportunity.businessUnitId,
@@ -358,10 +357,13 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
         stage: payload.stage ? Number(payload.stage) : opportunity.stage,
         title: title.slice(0, 200),
         description: payload.description ? String(payload.description).slice(0, 5000) : null,
-        requestedFields: kind === "information" ? cleanFields(payload.requestedFields) : [],
+        // An information request's items build the response form; a pre-site
+        // inspection's are what the requester wrote in beyond the checklist,
+        // carried onto the site member's form by the coordinator.
+        requestedFields: kind === "information" ? cleanFields(payload.requestedFields) : cleanRequestedFields(payload.requestedFields),
         requestedDocuments: cleanDocuments(payload.requestedDocuments),
         createdById: user.id,
-        priority: payload.priority || defaultPriorityFor(kind),
+        priority: payload.priority || defaultPriorityFor(),
         // A pre-site inspection's required checklist items — the site
         // member's form is built from them. Only assignments go out to site.
         inspectionChecklist: kind === "assignment" ? cleanChecklistKeys(payload.inspectionChecklist) : [],
@@ -403,9 +405,7 @@ export const updateRequest = async (user, id, payload = {}) => {
     if (payload.description !== undefined)
         fields.description = payload.description ? String(payload.description).slice(0, 5000) : null;
     if (payload.priority !== undefined) {
-        const priorities = prioritiesFor(request.kind);
-        if (!priorities.includes(payload.priority))
-            throw httpError(400, `priority must be one of: ${priorities.join(", ")}`);
+        if (!PRIORITIES.includes(payload.priority)) throw httpError(400, `priority must be one of: ${PRIORITIES.join(", ")}`);
         fields.priority = payload.priority;
     }
     if (payload.inspectionChecklist !== undefined && request.kind === "assignment")

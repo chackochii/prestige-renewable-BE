@@ -285,6 +285,18 @@ const acceptedProposalsFor = async (opportunityIds) => {
     return byOpp;
 };
 
+/**
+ * The installed equipment in one line — "8.8 kW · 20 × Jinko Tiger Neo 440W ·
+ * Sungrow SH5.0RS · Sungrow SBR HV 9.6 kWh" — as the accepted quote had it.
+ * Shown on the record from construction on (warranty registration, DLP).
+ */
+export const installedSystemSummary = async (opportunityId) => {
+    const accepted = (await acceptedProposalsFor([opportunityId])).get(opportunityId);
+    if (!accepted) return null;
+    const system = systemFromItems(accepted.quoteVersion?.snapshot?.quote?.items);
+    return [system.sizeKw ? `${system.sizeKw} kW` : null, system.panels, system.inverter, system.battery].filter(Boolean).join(" · ") || null;
+};
+
 /** The job's approvals, with everything the detail view shows. */
 export const listApprovals = async (id) => {
     const opportunity = await loadOpportunity(id);
