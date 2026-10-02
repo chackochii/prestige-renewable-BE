@@ -39,6 +39,12 @@ export const NOTIFICATION_EVENTS = {
     "site_visit.assigned": { label: "Site visit handed to you", priority: "high" },
     "site_visit.submitted": { label: "Site-visit form submitted", priority: "high" },
 
+    // Approvals, stage 5 (modules/opportunity/service/approvalsService).
+    "approvals.started": { label: "Job entered approvals — approvals to lodge", priority: "high" },
+    "approvals.finance_required": { label: "Finance application to initiate", priority: "high" },
+    "approvals.rejected": { label: "An approval was not given — back with sales", priority: "high" },
+    "approvals.complete": { label: "All approvals received — start procurement", priority: "high" },
+
     // The customer and their proposal link (modules/opportunity/service/proposalService).
     "proposal.viewed": { label: "Customer opened their proposal", priority: "low" },
     "proposal.accepted": { label: "Customer accepted the proposal", priority: "high" },

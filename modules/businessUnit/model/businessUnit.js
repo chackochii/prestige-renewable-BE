@@ -55,15 +55,22 @@ export default (sequelize, DataTypes) => {
                 allowNull: false,
                 defaultValue: [1, 2, 3, 4, 5, 6, 7, 8, 9],
             },
-            // External approvals gathered at stage 5, e.g. [{ key: "council", label: "Council / DA" }].
-            // Empty array = this unit has no external approvals section.
+            // The approvals a job in this unit can need, e.g. [{ key: "da", label: "Council DA" }].
+            // Sales or estimation pick from this list per job (opportunities.requiredApprovals)
+            // and stage 5 tracks only those. The keys dnsp, da and finance carry the
+            // coordinator's checklists on the approvals screen; any other key is a
+            // plain approval to record. Empty array = this unit has no approvals.
             approvalTypes: {
                 type: DataTypes.JSONB,
                 allowNull: false,
                 defaultValue: [
-                    { key: "council", label: "Council / DA" },
-                    { key: "dnsp", label: "DNSP grid connection" },
-                    { key: "strata", label: "Facility / strata" },
+                    { key: "dnsp", label: "DNSP / network connection approval" },
+                    { key: "da", label: "Council DA / development consent" },
+                    { key: "finance", label: "Finance approval" },
+                    { key: "strata", label: "Strata / body corporate approval" },
+                    { key: "heritage", label: "Heritage overlay approval" },
+                    { key: "landlord", label: "Landlord consent" },
+                    { key: "electrical_safety", label: "Electrical safety / CES notification" },
                     { key: "rebate", label: "Rebate pre-approval" },
                 ],
             },

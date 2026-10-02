@@ -267,6 +267,21 @@ Sales sends the customer a link to a saved quote version (`POST /:id/proposals`)
 
 The customer's message is theirs: when they answered the latest proposal (renegotiate or decline, with a note) that note is carried over word for word with who and when (`customerChannel`: `customer` through the link, `staff` recorded after a call); `customerMessage` in the body only counts when there is no recorded answer. A plain `POST /:id/advance` out of stage 2 completes an open round too, on the newest saved version. The open round rides on every opportunity payload as `requote`, and `opportunities.requote_requested_at` flags it for lists and the board.
 
+## Approvals (stage 5)
+
+Only the approvals a job needs are tracked. **Which ones** is decided early: `opportunities.requiredApprovals` holds keys from the unit's `approvalTypes` catalogue (Admin → Unit settings; default dnsp, da, finance, strata, heritage, landlord, electrical_safety, rebate), ticked by sales on the lead (`PATCH /:id { requiredApprovals }`) or confirmed by estimation (`PUT /:id/required-approvals`). When the customer accepts and the job enters stage 5 (`moveToNextStage` → `enterApprovals`), one `approvals` row is created per key; the operations coordinators are notified with the list (`approvals.started`) and finance when `finance` is among them (`approvals.finance_required`). See `modules/opportunity/service/approvalsService.js`.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `GET` | `/api/opportunities/approvals?businessUnitId=&search=` | `approvals.read` — stage-5 jobs plus ones that moved on in the last 30 days: `[{ id, number, stage, customer, site, contact, phase, existingSystem, system, acceptedValue, salesperson, enteredAt, slaDueAt, requiredApprovals, catalogue, items }]` |
+| `GET` | `/api/opportunities/:id/approvals` | the job as above, with `history` and `notifications` |
+| `PUT` | `/api/opportunities/:id/required-approvals` | `leads.update` / `estimation.update` / `approvals.update` — `{ keys: [...] }` validated against the unit's catalogue → the opportunity; at stage 5 the rows follow (a type taken off the list keeps its row with `required: false`) |
+| `PATCH` | `/api/opportunities/:id/approvals/:type` | `approvals.update` — `{ status?, authority?, reference?, submittedAt?, decidedAt?, note?, documentName?, checklist? }` → the job's approvals. `status`: `not_started \| submitted \| approved \| rejected \| not_applicable`; `checklist` (the coordinator's CL-07/08/09 answers for dnsp/da/finance) is merged, not replaced; lodging and deciding stamp the dates and who |
+
+**The gate.** A status change goes in the history. `rejected` notifies the salesperson, the sales & marketing managers and the business owners (`approvals.rejected`); the job stays at the stage. When the last required approval becomes `approved` the job moves on to the next enabled stage by itself and the procurement managers are told (`approvals.complete`). `POST /:id/advance` out of stage 5 refuses while any required approval is not approved — a job with none required is moved by hand.
+
+The approvals page's facts for the checklists come off the record and the accepted proposal's quote snapshot (`system`: panels × watts → kW, inverter, battery; `acceptedValue` = the accepted proposal's total). `council` is not captured on the lead and comes back null.
+
 ## Notifications
 
 Every in-app notice goes through one function — `notify()` in `modules/notification/service/notificationService.js`. Give it an event key, a title and who to tell (named user ids and/or every holder of a role in the unit); it resolves the priority, writes the rows and pushes them to any browser the recipients have open. The person who caused the event is never notified of their own action unless the caller passes `includeActor`.

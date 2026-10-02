@@ -235,6 +235,12 @@ export default (sequelize, DataTypes) => {
             leadChangeSummary: { type: DataTypes.TEXT },
             leadChangeAcknowledgedAt: { type: DataTypes.DATE },
 
+            // ---- Approvals (stage 5) -------------------------------------------
+            // Which approvals this job needs: keys from the unit's approvalTypes
+            // catalogue, picked by sales on the lead or by estimation. Stage 5
+            // creates one approvals row per key (approvalsService).
+            requiredApprovals: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+
             // ---- Re-quote (stage 3 → 2) ----------------------------------------
             // Set while a requote_requests row is open — the customer asked for
             // changes and the job is back with the estimator — so lists and the

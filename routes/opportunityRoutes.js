@@ -45,6 +45,7 @@ import {
 } from "../modules/opportunity/controller/opportunityController.js";
 import * as collaboration from "../modules/collaboration/controller/collaborationController.js";
 import * as proposals from "../modules/opportunity/controller/proposalController.js";
+import * as approvals from "../modules/opportunity/controller/approvalsController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -78,6 +79,8 @@ router.use(tokenValidator);
 // The proposals page: stage-3 jobs with their latest proposal. Mounted before
 // the /:id scope below so "proposals" is never read as an opportunity id.
 router.get("/proposals", read, requireUnitAccess((req) => req.query.businessUnitId), proposals.board); // ?businessUnitId=&search= → [{ opportunity, latestQuoteVersion, proposal, proposalCount }]
+// The approvals page: stage-5 jobs with their required approvals (plus ones that moved on in the last 30 days).
+router.get("/approvals", requirePermission("approvals.read"), requireUnitAccess((req) => req.query.businessUnitId), approvals.board); // ?businessUnitId=&search= → [job]
 
 // Deny-by-default unit scoping (ADM excepted): a caller only reaches records
 // in the business units they are assigned to. Every /:id/... route below is
@@ -108,6 +111,13 @@ router.post("/:id/proposals/:proposalId/outcome", write, proposals.outcome); // 
 // returns through estimation's hand-over (POST /:id/estimation/handover).
 router.get("/:id/requotes", readAny, proposals.listRequotes); // → rounds, newest first
 router.post("/:id/requotes", write, proposals.requestRequote); // { comments, estimatorId?, customerMessage?, customerName? } → { requote, opportunity } (now at stage 2)
+
+// Approvals (stage 5). Which approvals the job needs is set early — by sales
+// (leads.update), estimation (estimation.update) or the coordinator
+// (approvals.update); each one is then lodged and decided by the coordinator.
+router.get("/:id/approvals", requireAnyPermission("approvals.read", "leads.read", "estimation.read"), approvals.list); // → { items: [...], history, notifications, … }
+router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...] } → the opportunity
+router.patch("/:id/approvals/:type", requirePermission("approvals.update"), approvals.update); // { status?, authority?, reference?, submittedAt?, decidedAt?, note?, documentName?, checklist? } → the job's approvals
 
 // Job history: notes people add plus system events (assignments, notifications).
 router.get("/:id/history", readAny, getHistory);

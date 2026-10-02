@@ -12,6 +12,9 @@ import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
+// approvalsService imports moveToNextStage from here in turn (the last
+// approval moves the job on); both only call each other at request time.
+import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, sanitizeRequiredApprovals } from "./approvalsService.js";
 import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteService.js";
 import { advancePermissionFor, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 
@@ -50,6 +53,8 @@ const LEAD_FIELDS = [
     "preferredInstallTimeframe", "preferredInstallLocation",
     // The optional rows, merged rather than replaced (see mergeEstimationInput).
     "estimationInput",
+    // Which approvals the job will need at stage 5 — keys from the unit's catalogue.
+    "requiredApprovals",
 ];
 const BOOLEAN_FIELDS = [
     "energyHasBills", "hasOwnerDiscount", "needsClientVisit",
@@ -122,6 +127,7 @@ const pickLeadFields = (payload) => {
     if (picked.contactAttempts !== undefined) picked.contactAttempts = sanitizeContactAttempts(picked.contactAttempts);
     if (picked.customFields !== undefined) picked.customFields = sanitizeCustomFields(picked.customFields);
     if (picked.estimationInput !== undefined) picked.estimationInput = sanitizeEstimationInput(picked.estimationInput);
+    if (picked.requiredApprovals !== undefined) picked.requiredApprovals = sanitizeRequiredApprovals(picked.requiredApprovals);
     if (picked.hasOwnerDiscount === false) {
         picked.ownerDiscountName = null;
         picked.ownerDiscountAmount = null;
@@ -371,6 +377,7 @@ export const createLead = async (payload = {}, actor) => {
 
     const fields = pickLeadFields(payload);
     if (!fields.customerLegalName?.trim()) throw httpError(400, "customerLegalName is required");
+    if (fields.requiredApprovals) assertApprovalKeys(fields.requiredApprovals, unit);
     fields.qualification = fields.qualification ?? "nurture";
     if (fields.qualification === "qualified") await assertCanQualify(fields, { isNew: true });
     assertQualificationConsistent(fields);
@@ -421,6 +428,8 @@ export const updateLead = async (id, payload = {}, actor) => {
         fields.estimatorId = await assertUserExists(fields.estimatorId, "estimator");
     if (fields.salespersonId !== undefined)
         fields.salespersonId = await assertUserExists(fields.salespersonId, "salesperson");
+    if (fields.requiredApprovals !== undefined)
+        assertApprovalKeys(fields.requiredApprovals, await BusinessUnit.findByPk(opportunity.businessUnitId));
     if (payload.lifecycle !== undefined) fields.lifecycle = payload.lifecycle; // model validates the value
     const lifecycleWas = opportunity.lifecycle;
 
@@ -496,6 +505,18 @@ export const advanceStage = async (id, actor, message = {}) => {
         if (!accepted) throw httpError(400, "The customer has not accepted a proposal yet");
     }
 
+    // Leaving approvals needs every required approval approved (the last one
+    // normally moves the job on by itself — see approvalsService). A job that
+    // needed none is moved by hand from here.
+    if (opportunity.stage === APPROVALS_STAGE) {
+        const waiting = await db.Approval.findAll({
+            where: { opportunityId: opportunity.id, required: true, status: { [Op.ne]: "approved" } },
+            attributes: ["label"],
+            order: [["id", "ASC"]],
+        });
+        if (waiting.length) throw httpError(400, `Waiting on approvals: ${waiting.map((row) => row.label).join(", ")}`);
+    }
+
     const from = opportunity.stage;
     const moved = await moveToNextStage(opportunity, actor, message);
     // A job sent back for a re-quote returns to proposal through here (the
@@ -539,6 +560,10 @@ export const moveToNextStage = async (opportunity, actor = null, { byline = null
         opportunity,
         actor,
     });
+
+    // Arriving at approvals sets up the approvals the job needs and tells the
+    // coordinators (and finance) what there is to lodge.
+    if (next === APPROVALS_STAGE) await enterApprovals(opportunity, actor);
 
     return getOpportunity(opportunity.id);
 };
