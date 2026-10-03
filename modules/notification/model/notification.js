@@ -5,6 +5,9 @@ export default (sequelize, DataTypes) => {
             id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
             userId: { type: DataTypes.INTEGER, allowNull: false },
             opportunityId: { type: DataTypes.INTEGER, allowNull: true },
+            // The collaboration request this is about, when it is about one —
+            // the inbox opens the request itself rather than the job.
+            requestId: { type: DataTypes.INTEGER, allowNull: true },
             // What happened — a key from notification/service/notificationEvents.js.
             event: { type: DataTypes.STRING(40), allowNull: false, defaultValue: "general" },
             // high | medium | low, resolved when the row is written (the event
@@ -31,6 +34,7 @@ export default (sequelize, DataTypes) => {
     Notification.associate = (db) => {
         Notification.belongsTo(db.User, { foreignKey: "userId", as: "user" });
         Notification.belongsTo(db.Opportunity, { foreignKey: "opportunityId", as: "opportunity" });
+        Notification.belongsTo(db.CollaborationRequest, { foreignKey: "requestId", as: "request" });
     };
 
     return Notification;

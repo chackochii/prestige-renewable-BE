@@ -222,7 +222,7 @@ Editing a lead that has already been handed over (stage 2+, or an estimator assi
 Raised from a stage when the next step belongs to another team. Two kinds, because they behave differently:
 
 - **information** — "Sales, we're missing the client's usage data." Answered once on a form built from the fields the requester asked for (`requestedFields`), then accepted or sent back for clarification. The response lives on the request row; a draft is private to the assignee until submitted.
-- **assignment** — "Operations, we need a site visit." Worked over time: assigned → scheduled → in progress → completed → report submitted, each step a `collaboration_progress` row. An entry marked `internal` stays inside the assignee's department and is stripped for everyone else.
+- **assignment** — "Operations, we need a site visit." Worked over time: assigned → scheduled → in progress → completed → report submitted, each step a `collaboration_progress` row. An entry marked `internal` stays inside the assignee's department and is stripped for everyone else. The findings coming in (the site-visit form submitted, or the assignment marked `completed` / `report_submitted`) is not the end: the requester reads them and **approves** them (`accepted` — closed; a pre-site inspection approved is what lets the job leave estimation) or **sends them back** with a note (`returned` — open again; the site-visit form reopens under the same link so operations can go again). Only the requester may do either, and only once the findings are in.
 
 Files supplied against a request live in the Space like any other document (`collaboration_attachments`); `attachment` answers one of the requested documents, `report` is what the requester waits on at the end. The requester can copy one onto the job itself, where it lands in the record's own attachments.
 
@@ -235,8 +235,8 @@ Files supplied against a request live in the Space like any other document (`col
 | `GET` | `/api/collaboration/requests/:id/history` | read | `[{ id, action, detail, byName, at }]` |
 | `PATCH` | `/api/collaboration/requests/:id` | read (requester) | `{ title?, description?, priority?, dueAt?, assigneeId? }` |
 | `POST` | `/api/collaboration/requests/:id/response` | read (assignee) | `{ fields, note?, draft? }` |
-| `POST` | `/api/collaboration/requests/:id/decision` | read (requester) | `{ outcome: accepted \| clarification_required \| returned, note? }` |
-| `POST` | `/api/collaboration/requests/:id/progress` | read (assignee) | `{ status, note?, scheduledFor?, internal? }` |
+| `POST` | `/api/collaboration/requests/:id/decision` | read (requester) | information: `{ outcome: accepted \| clarification_required \| returned, note? }` on a submitted response. Assignment: `{ outcome: accepted \| returned, note? }` once the findings are in — `returned` needs the note and reopens the site-visit form |
+| `POST` | `/api/collaboration/requests/:id/progress` | read (assignee) | `{ status, note?, scheduledFor?, internal? }` — never `accepted` / `returned`, which are the requester's; refused once the report is in or the assignment is closed |
 | `POST` | `/api/collaboration/requests/:id/cancel` | read (requester) | `{ reason }` |
 | `POST` | `/api/collaboration/requests/:id/attachments` | read (either party) | multipart `file` + `category` (`attachment` \| `report`) + `documentKey?` → `{ request, attachment }` |
 | `POST` | `/api/collaboration/requests/:id/attachments/file-on-job` | `leads.update` or `estimation.update` | `{ attachmentId, category }` — copies the file into the job's attachments |
@@ -246,6 +246,7 @@ Notes:
 
 - **Permissions gate the door, not the desk.** Every route asks only for `leads.read` / `estimation.read` in the record's unit; what a person may *do* is decided per request in the service — the assignee responds and reports progress, the requester edits, decides and cancels. Asking for `leads.update` would lock out operations and procurement, who hold read on the record and are exactly who this module hands work to.
 - **Unit scoping** is deny-by-default as everywhere else: a request outside the caller's business units answers 404, and a `businessUnitId` outside them answers 403.
+- **Who is in a department** follows from roles (`DEPARTMENT_ROLES` in `modules/collaboration/model/collaborationRequest.js`: sales = SMM, SREP · operations = BOM, OPC, SITEOM, CREW, QSM, OMM · procurement = PROC · finance = FIN · admin = BO, SYS, HRM, ADM). The people directory stamps them on every user — `GET /api/users/directory?businessUnitId=` returns `{ id, name, title, roles, status, departments }` and `&department=` narrows it to one team — which is how the "assign to another team" form lists only the team chosen. The assignee is not otherwise checked against the department: a unit with nobody in finance yet can still hand its finance request to someone.
 - **Every step is audited** in `collaboration_events` (the history tab) and notifies whoever is now waiting — see the events below.
 
 ## Proposal (stage 3) & re-quotes
@@ -300,7 +301,9 @@ await notify({
 
 **Priority** is `high`, `medium` or `low`, resolved in that order: what the caller passed → the unit's override (`business_units.notification_priorities`, edited on Admin → Unit settings) → the event's default in `modules/notification/service/notificationEvents.js`. Adding an event to that file is all a new notification needs; both the settings screen and the frontend read the list from `GET /api/notifications/events`.
 
-**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, the three role notices (new lead, estimation on hold, site visit needed), and the collaboration ones — `request.created`, `request.response.submitted`, `request.clarification.requested`, `request.response.accepted`, `request.cancelled`, `request.overdue`, `assignment.schedule.changed`, `assignment.progressed`, `assignment.completed`, `assignment.report.submitted`.
+**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, the three role notices (new lead, estimation on hold, site visit needed), and the collaboration ones — `request.created`, `request.response.submitted`, `request.clarification.requested`, `request.response.accepted`, `request.cancelled`, `request.overdue`, `assignment.schedule.changed`, `assignment.progressed`, `assignment.completed`, `assignment.report.submitted`, `assignment.findings.approved`, `assignment.findings.returned`, `site_visit.assigned`, `site_visit.submitted`.
+
+**What a notification carries:** `event`, `priority`, `title`, `body`, `read`, `opportunityId` / `opportunityNumber` and, when it is about a collaboration request, `requestId` (`notifications.request_id`) — the inbox opens that request in place rather than the job. Pass `request` (or `requestId`) to `notify()` to set it; every collaboration and site-visit notice does.
 
 **Live delivery** is Server-Sent Events, not WebSocket — the traffic only goes one way, so the browser's own `EventSource` handles reconnection and no protocol upgrade is needed. Open connections are held in memory per process, so a multi-instance deploy needs `publish()` moved onto a shared bus (Redis pub/sub); nothing else changes.
 
@@ -369,7 +372,7 @@ Only these fields are accepted. Everything else in the body is ignored, so a cal
 
 ## Estimation (stage 2) & quote builder API
 
-The estimator's workflow state lives on the opportunity (`estimation*` fields, returned by every opportunity endpoint) and each step is its own endpoint. Writes need `estimation.update`; reads accept `leads.read` or `estimation.read`. The advance gate for stage 2: client input resolved (`estimationClientInfoNeeded = false`) and a quote with at least one item.
+The estimator's workflow state lives on the opportunity (`estimation*` fields, returned by every opportunity endpoint) and each step is its own endpoint. Writes need `estimation.update`; reads accept `leads.read` or `estimation.read`. The advance gate for stage 2: client input resolved (`estimationClientInfoNeeded = false`); when a pre-site inspection is required (`estimationPreSiteInspectionRequired`, else the lead's `estimationInput.preSiteInspectionRequired` = yes) the latest operations assignment on the job must be `accepted` — the estimator approved its findings through the collaboration decision endpoint, which also sets `estimationSiteVisitCompleted`; and a quote with at least one item, saved as a version.
 
 > The separate "did sales hand over the requirements" step was dropped from the screens in Sep 2026 — what sales collected *is* the lead checklist, which the estimator reads rather than signs off. `POST /estimation/requirements` still works for older callers, but nothing gates on `estimationRequirementsReceived` any more, and the client-input question can be answered straight away.
 

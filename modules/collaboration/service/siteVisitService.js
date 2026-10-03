@@ -125,6 +125,7 @@ export const saveSiteVisitTask = async (user, id, payload = {}) => {
             userIds: [assignee.assigneeId],
             businessUnitId: request.businessUnitId,
             opportunity: request.opportunity,
+            request,
             actor: user,
         });
 
@@ -238,6 +239,7 @@ export const submitPublicTask = async (token, body) => {
         userIds: [request.assigneeId, request.createdById].filter(Boolean),
         businessUnitId: request.businessUnitId,
         opportunity: request.opportunity,
+        request,
     });
 
     return presentPublic(visit, request, photos);

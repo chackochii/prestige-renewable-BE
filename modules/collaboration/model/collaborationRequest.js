@@ -5,6 +5,28 @@
 
 export const REQUEST_KINDS = ["information", "assignment"];
 export const DEPARTMENTS = ["sales", "operations", "procurement", "finance", "admin"];
+
+/**
+ * Who a department's requests go to: the role codes that make a person part
+ * of it (seeders/roles-permissions.cjs). A person holding several roles may
+ * sit in several departments. The people directory stamps these on every
+ * user (GET /users/directory → departments), so a requester's "assign to"
+ * list can be narrowed to the team they chose. Estimators (DEST) are the
+ * requesters here, not a team requests are sent to, so they sit in none.
+ */
+export const DEPARTMENT_ROLES = {
+    sales: ["SMM", "SREP"],
+    operations: ["BOM", "OPC", "SITEOM", "CREW", "QSM", "OMM"],
+    procurement: ["PROC"],
+    finance: ["FIN"],
+    admin: ["BO", "SYS", "HRM", "ADM"],
+};
+
+/** The departments a user belongs to, from their role codes. */
+export const departmentsForRoles = (roles) => {
+    const held = Array.isArray(roles) ? roles : [];
+    return DEPARTMENTS.filter((department) => DEPARTMENT_ROLES[department].some((code) => held.includes(code)));
+};
 /**
  * A request's priority says whether the thing has to happen, not how urgent
  * it is: the team receiving it schedules off necessity. One scale for every
@@ -36,7 +58,13 @@ export const INFORMATION_STATUSES = [
     "cancelled",
 ];
 
-/** assignment: requested → assigned → scheduled → in progress → completed → report. */
+/**
+ * assignment: requested → assigned → scheduled → in progress → completed →
+ * report submitted → accepted. The findings coming in (the report, or the
+ * site-visit form) is not the end: the person who asked for the visit reads
+ * them and either approves them (`accepted`, closed) or sends them back
+ * (`returned`, open again for operations to go once more).
+ */
 export const ASSIGNMENT_STATUSES = [
     "requested",
     "assigned",
@@ -45,16 +73,24 @@ export const ASSIGNMENT_STATUSES = [
     "in_progress",
     "completed",
     "report_submitted",
+    "accepted",
+    "returned",
     "review_required",
     "cancelled",
 ];
 
+/** The requester's decisions on an assignment — never set by the assignee. */
+export const ASSIGNMENT_DECISIONS = ["accepted", "returned"];
+
 export const statusesFor = (kind) => (kind === "assignment" ? ASSIGNMENT_STATUSES : INFORMATION_STATUSES);
+
+/** An assignment nobody has to act on any more. */
+export const CLOSED_ASSIGNMENT_STATUSES = ["accepted", "cancelled"];
 
 /** Statuses that still need somebody to act. */
 export const OPEN_STATUSES = [
     ...INFORMATION_STATUSES.filter((s) => !["accepted", "cancelled"].includes(s)),
-    ...ASSIGNMENT_STATUSES.filter((s) => !["report_submitted", "cancelled"].includes(s)),
+    ...ASSIGNMENT_STATUSES.filter((s) => !CLOSED_ASSIGNMENT_STATUSES.includes(s)),
 ];
 
 export default (sequelize, DataTypes) => {

@@ -42,9 +42,10 @@ export const getAll = asyncHandler(async (req, res) => {
     successResponse(res, result);
 });
 
-// People picker list for one business unit — names and roles only.
+// People picker list for one business unit — names, roles and departments
+// only; ?department= narrows it to one team.
 export const directory = asyncHandler(async (req, res) => {
-    const users = await listDirectory({ businessUnitId: req.query.businessUnitId }, req.user ?? null);
+    const users = await listDirectory({ businessUnitId: req.query.businessUnitId, department: req.query.department }, req.user ?? null);
 
     successResponse(res, { data: users });
 });

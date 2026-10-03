@@ -6,7 +6,7 @@ import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
-import { isEstimationReady } from "./estimationService.js";
+import { isEstimationReady, preSiteInspectionBlocker } from "./estimationService.js";
 import { quoteHasItems } from "./quoteService.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
@@ -488,11 +488,14 @@ export const advanceStage = async (id, actor, message = {}) => {
         if (!opportunity.estimatorId)
             throw httpError(400, "Assign an estimator before leaving lead capture");
     }
-    // Leaving estimation needs sales' requirements confirmed, no client input
-    // outstanding, and a quote with at least one priced item.
+    // Leaving estimation needs no client input outstanding, the pre-site
+    // inspection's findings approved when one was needed, and a quote with at
+    // least one priced item.
     if (opportunity.stage === 2) {
         if (!isEstimationReady(opportunity))
             throw httpError(400, "Answer the client-input question before leaving estimation");
+        const inspection = await preSiteInspectionBlocker(opportunity);
+        if (inspection) throw httpError(400, inspection);
         if (!(await quoteHasItems(opportunity.id)))
             throw httpError(400, "Add at least one item to the quote before leaving estimation");
         // The proposal stage sends a saved version to the customer, so one has

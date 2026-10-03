@@ -7,13 +7,14 @@
 // Stage status is derived, never stored (mirrors the frontend's
 // estimationState): received null → awaiting requirements · false → on hold ·
 // true + clientInfoNeeded false → ready · true → awaiting client input.
+import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { assertAssignable, recordSystemEvent } from "./leadWorkflowService.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
 import { notify } from "../../notification/service/notificationService.js";
 
-const { Opportunity } = db;
+const { Opportunity, CollaborationRequest } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -43,6 +44,40 @@ const text = (value, max) => String(value ?? "").trim().slice(0, max);
  * Mirrors prestige-fe/src/helpers/stageTransition.js#estimationState.
  */
 export const isEstimationReady = (opportunity) => opportunity.estimationClientInfoNeeded === false;
+
+/**
+ * Whether the job needs a pre-site inspection: the estimator's own answer on
+ * their checklist, else what sales recorded on the lead ("yes" / "no" in the
+ * estimation input). Mirrors prestige-fe EstimationPanel#formFromOpp.
+ */
+export const preSiteInspectionRequired = (opportunity) => {
+    if (typeof opportunity.estimationPreSiteInspectionRequired === "boolean") return opportunity.estimationPreSiteInspectionRequired;
+    const asked = String(opportunity.estimationInput?.preSiteInspectionRequired ?? "").trim().toLowerCase();
+    if (asked === "yes") return true;
+    if (asked === "no") return false;
+    return null;
+};
+
+/**
+ * Why the pre-site inspection keeps the job in estimation, or null when it
+ * does not. A job that needs one is priced only once the estimator has read
+ * the findings of the visit they asked for and approved them — the latest
+ * operations assignment on the job is `accepted` (collaborationService
+ * decideResponse). Operations finishing the visit is not the same thing.
+ * Mirrors the frontend's preSiteResolved.
+ */
+export const preSiteInspectionBlocker = async (opportunity) => {
+    if (preSiteInspectionRequired(opportunity) !== true) return null;
+    const inspection = await CollaborationRequest.findOne({
+        where: { opportunityId: opportunity.id, kind: "assignment", department: "operations", status: { [Op.ne]: "cancelled" } },
+        attributes: ["id", "status"],
+        order: [["id", "DESC"]],
+    });
+    if (!inspection) return "This job needs a pre-site inspection — request it and approve its findings before leaving estimation";
+    if (inspection.status !== "accepted")
+        return `Approve the pre-site inspection findings (ASG-${inspection.id}) before leaving estimation`;
+    return null;
+};
 
 /**
  * { received: boolean, checklistKeys?: string[], reason?: string }

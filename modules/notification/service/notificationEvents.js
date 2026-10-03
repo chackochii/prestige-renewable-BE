@@ -36,6 +36,10 @@ export const NOTIFICATION_EVENTS = {
     "assignment.progressed": { label: "Assignment progressed", priority: "low" },
     "assignment.completed": { label: "Assignment completed", priority: "medium" },
     "assignment.report.submitted": { label: "Assignment report submitted", priority: "high" },
+    // The requester reading what a site visit brought back: approved, and the
+    // job can be priced; or sent back, and operations goes again.
+    "assignment.findings.approved": { label: "Site-visit findings approved", priority: "low" },
+    "assignment.findings.returned": { label: "Site-visit findings sent back", priority: "high" },
     "site_visit.assigned": { label: "Site visit handed to you", priority: "high" },
     "site_visit.submitted": { label: "Site-visit form submitted", priority: "high" },
 

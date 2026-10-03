@@ -7,7 +7,9 @@
 //              routes check; internal progress notes and unsubmitted drafts
 //              are still stripped for everyone but the assignee.
 //   respond  — the assignee, on an information request
-//   decide   — the requester, once a response is in
+//   decide   — the requester, once a response is in — or, on a site visit,
+//              once its findings are in: approved, the job can be priced;
+//              sent back, operations goes again
 //   progress — the assignee, on an assignment
 //   edit /
 //   cancel   — the requester, while it is still open
@@ -21,7 +23,10 @@ import storage from "../../../utils/storage.js";
 import { signDownloadToken } from "../../../utils/jwt.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { addAttachment as fileOnOpportunity } from "../../opportunity/service/leadAttachmentService.js";
+import { recordSystemEvent } from "../../opportunity/service/leadWorkflowService.js";
 import {
+    ASSIGNMENT_DECISIONS,
+    CLOSED_ASSIGNMENT_STATUSES,
     DEPARTMENTS,
     PRIORITIES,
     REQUEST_KINDS,
@@ -56,8 +61,21 @@ export const isAdmin = (user) => Array.isArray(user?.roles) && user.roles.includ
 
 const isOpen = (request) =>
     request.kind === "assignment"
-        ? !["report_submitted", "cancelled"].includes(request.status)
+        ? !CLOSED_ASSIGNMENT_STATUSES.includes(request.status)
         : OPEN_INFORMATION.includes(request.status);
+
+/**
+ * The visit has brought something back — the person attending submitted the
+ * site-visit form, or operations marked the assignment done — so the person
+ * who asked for it has findings to approve or send back. Mirrors the
+ * frontend's inspectionDelivered.
+ */
+export const findingsDelivered = (request) => {
+    if (request.kind !== "assignment") return false;
+    const visit = request.siteVisit;
+    if (visit?.submittedAt || visit?.status === "submitted") return true;
+    return ["completed", "report_submitted"].includes(request.status);
+};
 
 // ---- Presentation -----------------------------------------------------------
 
@@ -384,6 +402,7 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
             body: `${user.name} asked ${kind === "assignment" ? "you to take this on" : "you for information"} on ${opportunity.number} — ${customerOf({ opportunity })}.`,
             userIds: [assignee.id],
             opportunity,
+            request,
             actor: user,
         });
 
@@ -427,6 +446,7 @@ export const updateRequest = async (user, id, payload = {}) => {
             body: `${user.name} passed this to you on ${request.opportunity?.number ?? "a record"}.`,
             userIds: [reassignedTo.id],
             opportunity: request.opportunity,
+            request,
             actor: user,
         });
 
@@ -448,6 +468,7 @@ export const cancelRequest = async (user, id, payload = {}) => {
             body: `${user.name} cancelled "${request.title}"${reason ? ` — ${reason}` : ""}.`,
             userIds: [request.assigneeId],
             opportunity: request.opportunity,
+            request,
             actor: user,
         });
 
@@ -484,17 +505,27 @@ export const submitResponse = async (user, id, payload = {}) => {
             body: `${user.name} answered "${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""}.`,
             userIds: [request.createdById],
             opportunity: request.opportunity,
+            request,
             actor: user,
         });
 
     return reload(request, user);
 };
 
-/** body: { outcome: accepted | clarification_required | returned, note? } */
+/**
+ * The requester deciding on what came back.
+ *
+ *   information — body: { outcome: accepted | clarification_required | returned, note? }
+ *   assignment  — body: { outcome: accepted | returned, note? }, once the
+ *                 visit's findings are in (findingsDelivered). Approving them
+ *                 closes the assignment and lets the job be priced; sending
+ *                 them back reopens it — and the site-visit form, under the
+ *                 same link — for operations to go again.
+ */
 export const decideResponse = async (user, id, payload = {}) => {
     const request = assertReadable(await loadRequest(id), user);
-    if (request.kind !== "information") throw httpError(400, "Only information requests take a decision");
-    if (!isRequester(request, user)) throw httpError(403, "Only the person who raised this can decide on the response");
+    if (!isRequester(request, user)) throw httpError(403, "Only the person who raised this can decide on it");
+    if (request.kind === "assignment") return decideFindings(user, request, payload);
     if (!DECIDABLE.includes(request.status)) throw httpError(400, "There is no response to decide on yet");
     if (!DECISIONS.includes(payload.outcome))
         throw httpError(400, `outcome must be one of: ${DECISIONS.join(", ")}`);
@@ -519,6 +550,67 @@ export const decideResponse = async (user, id, payload = {}) => {
                 : `${user.name} needs more on "${request.title}" — ${note}`,
             userIds: [request.assigneeId],
             opportunity: request.opportunity,
+            request,
+            actor: user,
+        });
+
+    return reload(request, user);
+};
+
+/**
+ * The requester on a site visit's findings. Reached through decideResponse,
+ * which has already checked that this is the requester.
+ */
+const decideFindings = async (user, request, payload = {}) => {
+    if (CLOSED_ASSIGNMENT_STATUSES.includes(request.status)) throw httpError(400, `This assignment is already ${request.status}`);
+    if (!findingsDelivered(request)) throw httpError(400, "There are no findings to decide on yet — the visit has not come back");
+    if (!ASSIGNMENT_DECISIONS.includes(payload.outcome))
+        throw httpError(400, `outcome must be one of: ${ASSIGNMENT_DECISIONS.join(", ")}`);
+
+    const accepted = payload.outcome === "accepted";
+    const note = payload.note ? String(payload.note).slice(0, 5000) : null;
+    if (!accepted && !note) throw httpError(400, "Say what is missing or has to be re-checked when sending the findings back");
+
+    await request.update({
+        status: payload.outcome,
+        clarificationNote: accepted ? request.clarificationNote : note,
+    });
+
+    // Sent back: the form goes out again under the link already handed out.
+    // Its last answers stay on the row until the next submission replaces them.
+    if (!accepted && request.siteVisit?.status === "submitted")
+        await request.siteVisit.update({ status: "pending", submittedAt: null });
+
+    await recordEvent(request, accepted ? "Findings approved" : "Findings sent back", note, user);
+
+    // The job's own record follows: the pre-site inspection is done — or, sent
+    // back, not after all — which is what the stage-2 gate and the job's
+    // "waiting for" line read.
+    const opportunity = await Opportunity.findByPk(request.opportunityId);
+    if (opportunity) {
+        await opportunity.update({ estimationSiteVisitCompleted: accepted });
+        await recordSystemEvent(
+            opportunity,
+            accepted
+                ? `Pre-site inspection findings approved (${requestLabel(request)})`
+                : `Pre-site inspection findings sent back (${requestLabel(request)}): ${note}`,
+            user
+        );
+    }
+
+    // Whoever runs the visit hears: the assignee, and the person attending
+    // when they are in the directory.
+    const recipients = [...new Set([request.assigneeId, request.siteVisit?.assigneeId].filter(Boolean))];
+    if (recipients.length)
+        await notify({
+            event: accepted ? "assignment.findings.approved" : "assignment.findings.returned",
+            title: `${requestLabel(request)}: findings ${accepted ? "approved" : "sent back"}`,
+            body: accepted
+                ? `${user.name} approved the findings of "${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""}.`
+                : `${user.name} sent the findings of "${request.title}" back — ${note}`,
+            userIds: recipients,
+            opportunity: request.opportunity,
+            request,
             actor: user,
         });
 
@@ -539,11 +631,16 @@ export const addProgress = async (user, id, payload = {}) => {
     const request = assertReadable(await loadRequest(id), user);
     if (request.kind !== "assignment") throw httpError(400, "Only assignments take progress updates");
     if (!isAssignee(request, user)) throw httpError(403, "Only the assignee can update progress");
-    if (["cancelled", "report_submitted"].includes(request.status))
-        throw httpError(400, "This assignment is closed");
+    if (request.status === "report_submitted")
+        throw httpError(400, "The report is in — it is with the person who asked for it to approve");
+    if (CLOSED_ASSIGNMENT_STATUSES.includes(request.status)) throw httpError(400, "This assignment is closed");
 
     const status = payload.status || request.status;
     if (!statusesFor("assignment").includes(status)) throw httpError(400, `status "${status}" is not an assignment status`);
+    // Approving or sending back the findings is the requester's call (the
+    // decision endpoint), never a progress step.
+    if (ASSIGNMENT_DECISIONS.includes(status) && status !== request.status)
+        throw httpError(400, `Only the person who raised this can mark it ${status}`);
     const internal = Boolean(payload.internal);
     const note = payload.note ? String(payload.note).slice(0, 5000) : null;
     const scheduledFor = payload.scheduledFor !== undefined ? parseDate(payload.scheduledFor, "scheduledFor") : undefined;
@@ -586,6 +683,7 @@ export const addProgress = async (user, id, payload = {}) => {
             userIds: [reassignedTo.id],
             businessUnitId: request.businessUnitId,
             opportunity: request.opportunity,
+            request,
             actor: user,
         });
     }
@@ -606,6 +704,7 @@ export const addProgress = async (user, id, payload = {}) => {
             body: `${user.name} updated "${request.title}"${note ? ` — ${note}` : ""}.`,
             userIds: [request.createdById],
             opportunity: request.opportunity,
+            request,
             actor: user,
         });
     }

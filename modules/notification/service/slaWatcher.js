@@ -82,6 +82,8 @@ export const runOverdueRequestCheck = async () => {
             body: `"${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""} was due ${due.toISOString().slice(0, 10)}.`,
             userIds: [request.assigneeId],
             businessUnitId: request.businessUnitId,
+            opportunity: request.opportunity,
+            request,
             dedupeKey: `request-overdue:${request.id}:${due.toISOString()}`,
         });
         raised += created;

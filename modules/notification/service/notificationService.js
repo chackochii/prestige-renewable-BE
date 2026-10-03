@@ -27,6 +27,9 @@ export const presentNotification = (row) => {
         read: Boolean(plain.read),
         opportunityId: plain.opportunityId ?? null,
         opportunityNumber: plain.opportunity?.number ?? null,
+        // Set when the notice is about a collaboration request: the inbox opens
+        // that request in place instead of the job.
+        requestId: plain.requestId ?? null,
         createdAt: plain.createdAt,
     };
 };
@@ -82,6 +85,7 @@ export const priorityFor = async (event, { priority = null, businessUnitId = nul
  *       userIds: [estimator.id],             // named recipients
  *       roleCode: "SMM",                     // and/or every holder in the unit
  *       opportunity,                         // links the notice to the record
+ *       request,                             // and to the collaboration request it is about (or requestId)
  *       actor,                               // never notifies the person acting
  *       priority: "high",                    // optional; overrides the unit setting
  *       dedupeKey: `sla:${opportunity.id}`,  // optional; at most one per user
@@ -98,6 +102,8 @@ export const notify = async ({
     roleCode = null,
     businessUnitId = null,
     opportunity = null,
+    request = null,
+    requestId = null,
     priority = null,
     dedupeKey = null,
     actor = null,
@@ -123,6 +129,7 @@ export const notify = async ({
     const rows = recipients.map((user) => ({
         userId: user.id,
         opportunityId: opportunity?.id ?? null,
+        requestId: request?.id ?? requestId ?? null,
         event,
         priority: level,
         title: String(title).slice(0, 255),

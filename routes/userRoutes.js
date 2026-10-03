@@ -29,11 +29,12 @@ const loginLimiter = rateLimit({
 router.post("/login", loginLimiter, login); // { email, password } → { token, user }
 router.get("/me", tokenValidator, me); // current user from the bearer token
 
-// People directory for pickers: id, name, title, roles, status of the active
+// People directory for pickers: id, name, title, roles, status and
+// departments (from the roles — collaboration DEPARTMENT_ROLES) of the active
 // users in one business unit the caller is assigned to. Open to any signed-in
 // user — it carries no contact details or login history. Must be mounted
 // before /:id.
-router.get("/directory", tokenValidator, directory); // ?businessUnitId= (required)
+router.get("/directory", tokenValidator, directory); // ?businessUnitId= (required) &department=sales|operations|procurement|finance|admin
 
 // Full user records (email, phone, last login, unit assignments) need
 // admin.read; writes need the matching admin.* action. Everything is scoped

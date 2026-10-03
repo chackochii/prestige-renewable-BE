@@ -7,6 +7,7 @@
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { SUPER_ROLE_CODE, listPermissionCodesForRoles } from "../../role/service/roleService.js";
+import { DEPARTMENTS, departmentsForRoles } from "../../collaboration/model/collaborationRequest.js";
 import { parseId } from "../../../utils/ids.js";
 import { signToken } from "../../../utils/jwt.js";
 
@@ -195,23 +196,30 @@ export const listUsers = async ({ filters = {}, pagination = {} } = {}, actor = 
 };
 
 // Minimal people directory for pickers (assign estimator, owner filters,
-// names on cards): id, name, title, roles and status only — no email, phone
-// or login history. Any signed-in user may call it, but only for a business
-// unit they are assigned to (ADM: any unit). Active users only.
-export const listDirectory = async ({ businessUnitId } = {}, actor = null) => {
+// names on cards): id, name, title, roles, status and the departments the
+// roles put them in — no email, phone or login history. Any signed-in user
+// may call it, but only for a business unit they are assigned to (ADM: any
+// unit). Active users only. `department` narrows it to one team, the way the
+// "assign to another team" form offers people.
+export const listDirectory = async ({ businessUnitId, department } = {}, actor = null) => {
     const unitId = parseId(businessUnitId, "businessUnitId");
     const scope = await actorUnitScope(actor);
     if (scope && !scope.includes(unitId)) throw httpError(403, "This business unit is outside your assignments");
+    const wanted = department === undefined || department === null || department === "" ? null : String(department);
+    if (wanted && !DEPARTMENTS.includes(wanted)) throw httpError(400, `department must be one of: ${DEPARTMENTS.join(", ")}`);
 
     const links = await UserBusinessUnit.findAll({ where: { businessUnitId: unitId }, attributes: ["userId"] });
     const ids = [...new Set(links.map((link) => link.userId))];
     if (!ids.length) return [];
-    return User.findAll({
+    const rows = await User.findAll({
         where: { id: { [Op.in]: ids }, status: "active" },
         attributes: ["id", "name", "title", "roles", "status"],
         order: [["name", "ASC"]],
         limit: 500,
     });
+    return rows
+        .map((row) => ({ ...row.get({ plain: true }), departments: departmentsForRoles(row.roles) }))
+        .filter((user) => !wanted || user.departments.includes(wanted));
 };
 
 // actor: the administrator or director performing the action (recorded on
