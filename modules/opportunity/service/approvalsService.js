@@ -232,8 +232,10 @@ const presentNotice = (row) => ({ at: row.createdAt, rule: row.event, to: row.us
 /**
  * One job as the approvals screens read it: the facts the checklists auto-fill
  * (customer, site, contact, phase, existing system, the accepted quote's
- * system and total), its required approvals in catalogue order, and — for the
- * detail view — its history and the notifications this stage raised.
+ * system and total), its required approvals in catalogue order, its history
+ * and the notifications this stage raised. The board and the detail view
+ * return the same shape, so the approvals page loads once and opens any of
+ * its jobs without asking again.
  */
 const presentJob = (opportunity, { catalogue, rows, accepted, salesperson = null, history = null, notifications = null }) => {
     const order = new Map(catalogue.map((type, index) => [type.key, index]));
@@ -297,41 +299,67 @@ export const installedSystemSummary = async (opportunityId) => {
     return [system.sizeKw ? `${system.sizeKw} kW` : null, system.panels, system.inverter, system.battery].filter(Boolean).join(" · ") || null;
 };
 
+/** How much of a job's history, and how many of its notices, a job carries. */
+const PER_JOB_LIMIT = 100;
+
+/**
+ * The history and the approvals notices of several jobs in two queries,
+ * newest first and capped per job — the board shows a full job for each row,
+ * so the approvals page needs one request, not one per job it opens.
+ */
+const historyAndNoticesFor = async (opportunityIds) => {
+    const [history, notices] = await Promise.all([
+        OpportunityHistory.findAll({
+            where: { opportunityId: { [Op.in]: opportunityIds } },
+            include: [{ model: User, as: "author", attributes: ["id", "name"] }],
+            order: [["createdAt", "DESC"], ["id", "DESC"]],
+            limit: PER_JOB_LIMIT * opportunityIds.length,
+        }),
+        Notification.findAll({
+            where: { opportunityId: { [Op.in]: opportunityIds }, event: { [Op.like]: "approvals.%" } },
+            include: [{ model: User, as: "user", attributes: ["id", "name"] }],
+            order: [["createdAt", "DESC"], ["id", "DESC"]],
+            limit: PER_JOB_LIMIT * opportunityIds.length,
+        }),
+    ]);
+    const perJob = (list, present) => {
+        const byOpp = new Map();
+        for (const row of list) {
+            const held = byOpp.get(row.opportunityId) ?? [];
+            if (held.length < PER_JOB_LIMIT) held.push(present(row));
+            byOpp.set(row.opportunityId, held);
+        }
+        return byOpp;
+    };
+    return { history: perJob(history, presentHistory), notifications: perJob(notices, presentNotice) };
+};
+
 /** The job's approvals, with everything the detail view shows. */
 export const listApprovals = async (id) => {
     const opportunity = await loadOpportunity(id);
-    const [unit, rows, accepted, salesperson, history, notices] = await Promise.all([
+    const [unit, rows, accepted, salesperson, { history, notifications }] = await Promise.all([
         BusinessUnit.findByPk(opportunity.businessUnitId),
         rowsFor([opportunity.id]),
         acceptedProposalsFor([opportunity.id]),
         opportunity.salespersonId ? User.findByPk(opportunity.salespersonId, { attributes: ["id", "name"] }) : null,
-        OpportunityHistory.findAll({
-            where: { opportunityId: opportunity.id },
-            include: [{ model: User, as: "author", attributes: ["id", "name"] }],
-            order: [["createdAt", "DESC"], ["id", "DESC"]],
-            limit: 100,
-        }),
-        Notification.findAll({
-            where: { opportunityId: opportunity.id, event: { [Op.like]: "approvals.%" } },
-            include: [{ model: User, as: "user", attributes: ["id", "name"] }],
-            order: [["createdAt", "DESC"], ["id", "DESC"]],
-            limit: 100,
-        }),
+        historyAndNoticesFor([opportunity.id]),
     ]);
     return presentJob(opportunity, {
         catalogue: catalogueFor(unit),
         rows,
         accepted: accepted.get(opportunity.id) ?? null,
         salesperson,
-        history: history.map(presentHistory),
-        notifications: notices.map(presentNotice),
+        history: history.get(opportunity.id) ?? [],
+        notifications: notifications.get(opportunity.id) ?? [],
     });
 };
 
 /**
  * The approvals page: every active job at the stage, plus jobs that moved on
  * in the last 30 days (so "ready for procurement" does not vanish the moment
- * it is). Narrowed to the stages the person may read.
+ * it is). Narrowed to the stages the person may read. Each row is the whole
+ * job as the detail view reads it — history and notices included — so the
+ * page is one request and opening a job is none.
  */
 export const approvalsBoard = async ({ businessUnitId, search } = {}, actor) => {
     const unitId = parseId(businessUnitId, "business unit id");
@@ -354,11 +382,12 @@ export const approvalsBoard = async ({ businessUnitId, search } = {}, actor) => 
     if (!opportunities.length) return [];
 
     const ids = opportunities.map((opportunity) => opportunity.id);
-    const [unit, rows, accepted, people] = await Promise.all([
+    const [unit, rows, accepted, people, { history, notifications }] = await Promise.all([
         BusinessUnit.findByPk(unitId),
         rowsFor(ids),
         acceptedProposalsFor(ids),
         User.findAll({ where: { id: { [Op.in]: [...new Set(opportunities.map((o) => o.salespersonId).filter(Boolean))] } }, attributes: ["id", "name"] }),
+        historyAndNoticesFor(ids),
     ]);
     const catalogue = catalogueFor(unit);
     const names = new Map(people.map((user) => [user.id, user]));
@@ -366,7 +395,16 @@ export const approvalsBoard = async ({ businessUnitId, search } = {}, actor) => 
     return opportunities
         // A job past the stage only belongs here if it went through it.
         .filter((opportunity) => opportunity.stage === APPROVALS_STAGE || hasRows.has(opportunity.id))
-        .map((opportunity) => presentJob(opportunity, { catalogue, rows, accepted: accepted.get(opportunity.id) ?? null, salesperson: names.get(opportunity.salespersonId) ?? null }));
+        .map((opportunity) =>
+            presentJob(opportunity, {
+                catalogue,
+                rows,
+                accepted: accepted.get(opportunity.id) ?? null,
+                salesperson: names.get(opportunity.salespersonId) ?? null,
+                history: history.get(opportunity.id) ?? [],
+                notifications: notifications.get(opportunity.id) ?? [],
+            })
+        );
 };
 
 // ---- Recording an approval ---------------------------------------------------------

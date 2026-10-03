@@ -13,9 +13,14 @@ export const list = asyncHandler(async (req, res) => {
     successResponse(res, { data: await approvals.listApprovals(req.params.id) });
 });
 
-/** { keys } → the refreshed opportunity (requiredApprovals on it). */
+/**
+ * { keys } → the refreshed opportunity (requiredApprovals on it) — or, with
+ * ?view=approvals, the job's approvals with the rows that followed the
+ * change, so the approvals screens need no second request.
+ */
 export const setRequired = asyncHandler(async (req, res) => {
-    successResponse(res, { data: await approvals.setRequiredApprovals(req.params.id, req.body, req.user) });
+    const opportunity = await approvals.setRequiredApprovals(req.params.id, req.body, req.user);
+    successResponse(res, { data: req.query.view === "approvals" ? await approvals.listApprovals(req.params.id) : opportunity });
 });
 
 export const update = asyncHandler(async (req, res) => {

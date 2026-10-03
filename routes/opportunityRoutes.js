@@ -116,7 +116,7 @@ router.post("/:id/requotes", write, proposals.requestRequote); // { comments, es
 // (leads.update), estimation (estimation.update) or the coordinator
 // (approvals.update); each one is then lodged and decided by the coordinator.
 router.get("/:id/approvals", requireAnyPermission("approvals.read", "leads.read", "estimation.read"), approvals.list); // → { items: [...], history, notifications, … }
-router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...] } → the opportunity
+router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...] } → the opportunity; ?view=approvals → the job's approvals
 router.patch("/:id/approvals/:type", requirePermission("approvals.update"), approvals.update); // { status?, authority?, reference?, submittedAt?, decidedAt?, note?, documentName?, checklist? } → the job's approvals
 
 // Job history: notes people add plus system events (assignments, notifications).
