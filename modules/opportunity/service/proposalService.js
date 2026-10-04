@@ -30,6 +30,7 @@ import { getOpportunity, listOpportunities, moveToNextStage, searchCondition } f
 import { REQUOTE_INCLUDE, presentRequote } from "./requoteService.js";
 import { readableStages } from "./stageAccess.js";
 import { LIVE_STATUSES, OPEN_STATUSES } from "../model/proposal.js";
+import { newestFirst, pageOf, pagingOf } from "../../../utils/pagination.js";
 
 const { Opportunity, Proposal, QuoteVersion, RequoteRequest, BusinessUnit, User, sequelize } = db;
 
@@ -293,14 +294,53 @@ export const recordOutcome = async (id, proposalId, payload = {}, actor) => {
     return { proposal: presentProposal(fresh), opportunity: await getOpportunity(opportunity.id) };
 };
 
+/** The board's filter chips, and the one a row falls in (mirrors prestige-fe helpers/proposals.js boardBucket). */
+export const BOARD_BUCKETS = ["draft", "waiting", "changes", "requote", "accepted", "declined"];
+const boardBucket = (row) => {
+    if (row.requote?.status === "open") return "requote";
+    const status = row.proposal?.status;
+    if (!status || status === "withdrawn" || status === "re-estimated") return "draft";
+    if (OPEN_STATUSES.includes(status)) return "waiting";
+    if (status === "negotiation") return "changes";
+    if (status === "accepted") return "accepted";
+    if (status === "rejected") return "declined";
+    return "draft";
+};
+
+/** When a row last moved: its latest proposal changing, or the job reaching where it is. */
+const lastActivity = (row) => {
+    const times = [row.proposal?.respondedAt, row.proposal?.sentAt, row.requote?.requestedAt, row.requote?.completedAt, row.opportunity.enteredStageAt, row.opportunity.createdAt]
+        .filter(Boolean)
+        .map((value) => new Date(value).getTime());
+    return times.length ? new Date(Math.max(...times)) : null;
+};
+
 /**
- * The proposals page: every active job at the proposal stage with its latest
- * proposal and latest saved quote; jobs sent back to the estimator for a
- * re-quote (so they do not vanish from sales' view while they are away); and
- * proposals answered in the last 30 days on jobs the person can still see —
- * so an acceptance does not vanish the moment the job moves on.
+ * The proposals page, a page at a time and newest first (the row that moved
+ * most recently at the top). ?bucket= narrows it to one of BOARD_BUCKETS;
+ * `counts` is how many rows fall in each bucket across the whole board — the
+ * stat cards and the chips — before the bucket filter.
  */
-export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
+export const proposalBoard = async (query = {}, actor) => {
+    const bucket = query.bucket && query.bucket !== "all" ? String(query.bucket) : null;
+    if (bucket && !BOARD_BUCKETS.includes(bucket)) throw httpError(400, `bucket must be one of: ${BOARD_BUCKETS.join(", ")}`);
+    const rows = (await proposalRows(query, actor)).sort(newestFirst((row) => lastActivity(row)));
+    const counts = Object.fromEntries(BOARD_BUCKETS.map((key) => [key, 0]));
+    for (const row of rows) counts[boardBucket(row)] += 1;
+    const filtered = bucket ? rows.filter((row) => boardBucket(row) === bucket) : rows;
+    const paging = pagingOf(query);
+    return { rows: pageOf(filtered, paging), total: filtered.length, page: paging.page, pageSize: paging.pageSize, counts: { ...counts, all: rows.length } };
+};
+
+/**
+ * Every row the proposals page can show: each active job at the proposal
+ * stage with its latest proposal and latest saved quote; jobs sent back to the
+ * estimator for a re-quote (so they do not vanish from sales' view while they
+ * are away); and proposals answered in the last 30 days on jobs the person
+ * can still see — so an acceptance does not vanish the moment the job moves
+ * on. The search applies to all three.
+ */
+const proposalRows = async ({ businessUnitId, search } = {}, actor) => {
     const { rows: open } = await listOpportunities(
         { businessUnitId, stage: PROPOSAL_STAGE, lifecycle: "Active", search, pageSize: 200 },
         actor
@@ -310,12 +350,20 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
     const allowed = await readableStages(actor);
     const unitId = parseId(businessUnitId, "business unit id");
     const stages = { [Op.in]: allowed.length ? allowed : [0] };
+    const matching = searchCondition(search);
     const [answered, requoting] = await Promise.all([
         Proposal.findAll({
             where: { respondedAt: { [Op.gte]: since }, status: { [Op.in]: ["accepted", "rejected"] } },
-            include: [{ model: Opportunity, as: "opportunity", required: true, where: { businessUnitId: unitId, stage: stages } }],
+            include: [
+                {
+                    model: Opportunity,
+                    as: "opportunity",
+                    required: true,
+                    where: { businessUnitId: unitId, stage: stages, ...(matching ? { [Op.and]: [matching] } : {}) },
+                },
+            ],
             order: [["respondedAt", "DESC"]],
-            limit: 100,
+            limit: 200,
         }),
         // With the estimator: back at stage 2 until the revised quote returns.
         Opportunity.findAll({
@@ -324,7 +372,7 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
                 lifecycle: "Active",
                 requoteRequestedAt: { [Op.ne]: null },
                 stage: stages,
-                ...(searchCondition(search) ? { [Op.and]: [searchCondition(search)] } : {}),
+                ...(matching ? { [Op.and]: [matching] } : {}),
             },
             order: [["updatedAt", "DESC"]],
             limit: 200,
@@ -382,6 +430,8 @@ export const proposalBoard = async ({ businessUnitId, search } = {}, actor) => {
                 estimator: person(opportunity.estimatorId),
                 estimatorId: opportunity.estimatorId,
                 requoteRequestedAt: opportunity.requoteRequestedAt,
+                createdAt: opportunity.createdAt,
+                enteredStageAt: opportunity.slaStartedAt,
                 updatedAt: opportunity.updatedAt,
             },
             latestQuoteVersion: version

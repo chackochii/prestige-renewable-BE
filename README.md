@@ -283,6 +283,50 @@ Only the approvals a job needs are tracked. **Which ones** is decided early: `op
 
 The approvals page's facts for the checklists come off the record and the accepted proposal's quote snapshot (`system`: panels × watts → kW, inverter, battery; `acceptedValue` = the accepted proposal's total). `council` is not captured on the lead and comes back null.
 
+## Procurement & delivery (stage 6)
+
+One `procurement_jobs` row per job, created when it enters the stage (`moveToNextStage` → `enterProcurement`) with its bill of quantities seeded from the accepted quote version's items — each line `{ key, kind: material | service, item, brand, unit, proposalQty, siteQty, proposalUnitCost, quotedUnitCost, supplier, availability, leadTimeDays }`. The Operations Coordinator (`procurement.update`) verifies the BOQ against the site, records the supplier quotes and the prices against each line, drafts and sends the purchase orders (`purchase_orders`, now with `lines`, `sent_at`, `scheduled_for`, `received_by`; statuses `draft | sent | confirmed | scheduled | delivered`) and works the five checklists from the Sydpro process chart — CL-11 BOQ vs site, CL-12 supplier quote, CL-13 PO release, CL-14 material receipt, CL-10 job creation — whose answers are kept as JSON on the row. Items the Procurement Manager signs (`procurement.approve`) are refused to anyone else. See `modules/opportunity/service/procurementService.js`; prestige-fe `helpers/procurement.js` runs the same rules.
+
+**The price variation.** Once every line is quoted the quoted cost is measured against the accepted proposal (round 1, however many times the BOQ is revised since). No variation: orders may go. Under 5%: the sales & marketing manager must approve; 5% or more: the business owner as well (`approvalPolicy.variationApproverRoles`). The API requests the approvals itself (`procurement.variation.approval_requested` to the role's holders, a daily `procurement.variation.reminder` from the SLA watcher while any is outstanding) and refuses to send a purchase order — or to tick the CL-13 release — until they are in. Approvers answer through the decision endpoint with their own role; the coordinator may also record an approval obtained elsewhere on CL-13.
+
+| Method | Route | Permission | Body → returns |
+|---|---|---|---|
+| `GET` | `/api/opportunities/procurement?businessUnitId=&search=` | `procurement.read` | stage-6 jobs plus ones that moved on in the last 30 days, whole: `[{ id, number, stage, customer, site, acceptedValue, salesperson, coordinator, enteredAt, slaDueAt, boq, revisions, quotes, approvals, purchaseOrders, greenDeal, checklist, variation: { proposalTotal, quotedTotal, pct, tier, approvers, pending, readyToOrder }, sections, history, notifications }]` |
+| `GET` | `/api/opportunities/:id/procurement` | `procurement.read` / `leads.read` / `estimation.read` / `approvals.read` | one job, the same shape (created from the accepted quote if the job reached the stage before this existed) |
+| `PATCH` | `/api/opportunities/:id/procurement/checklist/:section` | `procurement.update` or `procurement.approve` | `{ patch: { key: answer } }` merged into `boq | quote | po | receipt | jobCreation`. `changesApproved` / `releaseApproved` need `procurement.approve`. `po.variationApproved` records the approvals, `po.poReleasedConfirmed` sends every draft order (refused while the variation is unapproved), `receipt.allArrived` receives every sent order, `receipt.discrepancyFound = yes` tells procurement, a complete `jobCreation` creates the Green Deal job and tells site operations |
+| `PUT` | `/api/opportunities/:id/procurement/boq` | `procurement.update` | `{ lines: [{ key, siteQty?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }], add?: [{ item, brand?, unit?, kind?, siteQty, quotedUnitCost?, supplier? }], remove?: [key], revise?, reason? }` — `revise` closes the round (site figures become the proposal quantities; `reason` required). When the last line is quoted the variation is measured and the approvals requested |
+| `POST` / `DELETE` | `/api/opportunities/:id/procurement/quotes[/:index]` | `procurement.update` | `{ supplier, total, validUntil?, receivedAt?, note? }` |
+| `POST` | `/api/opportunities/:id/procurement/purchase-orders` | `procurement.update` | `{ supplier, lines: [key], total?, deliveryEta? }` → a draft numbered `PO-YY-NNNN` (total defaults to the lines' quoted cost) |
+| `PATCH` / `DELETE` | `/api/opportunities/:id/procurement/purchase-orders/:poId` | `procurement.update` | `{ status?, supplier?, lines?, total?, deliveryEta?, scheduledFor?, deliveredAt?, receivedBy? }` — `sent` needs the variation cleared, `scheduled` a date, `delivered` stamps who and when; only drafts can be deleted |
+| `POST` | `/api/opportunities/:id/procurement/approvals/:role/decision` | read on the record; the service checks the role | `{ outcome: approved \| rejected, note? }` — `role` is `SMM` or `BO`, held by the caller (ADM may answer for either); the last approval tells the coordinator the orders can go (`procurement.approvals.complete`) |
+
+**The gate.** `POST /:id/advance` out of stage 6 refuses until the materials are confirmed ready (CL-14 `materialsReady`) and the Green Deal job is created (CL-10 complete). Uploads the checklists attach go through `POST /:id/attachments` with the categories `supplier_quote`, `purchase_order` or `delivery_receipt` (`procurement.update` / `procurement.approve` may upload). Every write returns the whole job, and every step goes in the job history.
+
+## Paged lists
+
+Six screens page their lists, 12 rows to a page with numbered pages below, newest first: Leads, the Pipeline table, Quotes, Proposals, Approvals and Procurement. Each sends `?page=&pageSize=` and gets back `{ data: [rows on this page], total, page, pageSize, ...extra }` — `total` counts every matching row, `extra` carries what the screen shows across the whole list. Paging helpers are in `utils/pagination.js`.
+
+| Endpoint | Order | Filters | `extra` |
+|---|---|---|---|
+| `GET /api/opportunities` (Leads, Pipeline, Quotes) | newest created first | `stage`, `minStage`, `lifecycle`, `ownerId`, `authorId` (who captured it), `status` (the pipeline card's: `blocked \| requote \| new \| variation \| referral \| none`, worked out in SQL), `search` (number, customer name, email, phone, suburb) | `totals` with `totals=1`: `{ count, value, acceptedCount, acceptedValue }` across every match (the Quotes cards) |
+| `GET /api/opportunities/proposals` | most recent activity first (sent, answered, re-quoted, or reached the stage) | `search`, `bucket` (`draft \| waiting \| changes \| requote \| accepted \| declined`) | `counts` per bucket plus `all`, before the bucket filter (the cards and chips) |
+| `GET /api/opportunities/approvals` | the job that reached approvals most recently first | `search` | `counts`: `{ all, pending, approved, rejected, overdue }` (the cards) |
+| `GET /api/opportunities/procurement` | the job that reached procurement most recently first | `search` | `counts`: `{ all, inStage, awaitingApproval, purchaseOrders, greenDeal }` (the cards) |
+
+The three boards still return each job whole (history and notices included) so opening one needs no second request; those lookups are made for the rows on the page only. `pageSize` defaults to 12 on the boards and 50 on `/api/opportunities` (up to 200 — Home reads the whole list).
+
+## Demo data
+
+```bash
+npm run demo:seed                  # 20 leads, 20 in estimation, 20 in approvals, 20 in procurement (unit PRS)
+npm run demo:seed -- --count=10    # 10 at each stage instead
+npm run demo:seed -- --unit=PCC    # another business unit
+npm run demo:seed -- --fresh       # replace the demo jobs already there
+npm run demo:remove                # take every demo job out again
+```
+
+`scripts/seed-demo-pipeline.js` fills the four stages with jobs spread across what each stage goes through: leads qualified, still being worked and not a potential client; estimation waiting for an estimator, on hold, out for a site visit and pricing the quote; approvals just arrived, lodged, nearly there, refused and overdue (with the DNSP, DA and finance checklists answered to match); procurement getting quotes, waiting on a price-variation approval, sending purchase orders, receiving deliveries and with the Green Deal job created. Later-stage jobs carry their quote, the saved version and the customer's accepted proposal, so Quotes and Proposals list them too. Leads are created through `createLead`; everything after is written directly and backdated relative to the day it runs. No notifications are sent. Customers use `@demo.example.com` addresses, and every demo job carries one history note that `demo:remove` finds them by, so it never touches a real job; removing a job takes everything attached to it.
+
 ## Notifications
 
 Every in-app notice goes through one function — `notify()` in `modules/notification/service/notificationService.js`. Give it an event key, a title and who to tell (named user ids and/or every holder of a role in the unit); it resolves the priority, writes the rows and pushes them to any browser the recipients have open. The person who caused the event is never notified of their own action unless the caller passes `includeActor`.
@@ -301,7 +345,7 @@ await notify({
 
 **Priority** is `high`, `medium` or `low`, resolved in that order: what the caller passed → the unit's override (`business_units.notification_priorities`, edited on Admin → Unit settings) → the event's default in `modules/notification/service/notificationEvents.js`. Adding an event to that file is all a new notification needs; both the settings screen and the frontend read the list from `GET /api/notifications/events`.
 
-**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, the three role notices (new lead, estimation on hold, site visit needed), and the collaboration ones — `request.created`, `request.response.submitted`, `request.clarification.requested`, `request.response.accepted`, `request.cancelled`, `request.overdue`, `assignment.schedule.changed`, `assignment.progressed`, `assignment.completed`, `assignment.report.submitted`, `assignment.findings.approved`, `assignment.findings.returned`, `site_visit.assigned`, `site_visit.submitted`.
+**Events raised today:** the three assignments, `stage.advanced`, `lifecycle.changed` (won/lost/closed), `sla.overdue`, the three role notices (new lead, estimation on hold, site visit needed), and the collaboration ones — `request.created`, `request.response.submitted`, `request.clarification.requested`, `request.response.accepted`, `request.cancelled`, `request.overdue`, `assignment.schedule.changed`, `assignment.progressed`, `assignment.completed`, `assignment.report.submitted`, `assignment.findings.approved`, `assignment.findings.returned`, `site_visit.assigned`, `site_visit.submitted`; the approvals ones (`approvals.*`) and the procurement ones — `procurement.started`, `procurement.variation.approval_requested`, `procurement.variation.reminder`, `procurement.variation.decided`, `procurement.approvals.complete`, `procurement.delivery.discrepancy`, `procurement.green_deal.created`.
 
 **What a notification carries:** `event`, `priority`, `title`, `body`, `read`, `opportunityId` / `opportunityNumber` and, when it is about a collaboration request, `requestId` (`notifications.request_id`) — the inbox opens that request in place rather than the job. Pass `request` (or `requestId`) to `notify()` to set it; every collaboration and site-visit notice does.
 

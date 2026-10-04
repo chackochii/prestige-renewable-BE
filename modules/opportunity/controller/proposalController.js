@@ -19,8 +19,10 @@ const linkBase = (req) => {
 
 // ---- Staff ----
 
+// ?businessUnitId=&search=&bucket=&page=&pageSize= → { data, total, page, pageSize, counts }
 export const board = asyncHandler(async (req, res) => {
-    successResponse(res, { data: await proposals.proposalBoard(req.query, req.user) });
+    const { rows, total, page, pageSize, counts } = await proposals.proposalBoard(req.query, req.user);
+    successResponse(res, { data: rows, total, page, pageSize, counts });
 });
 
 export const list = asyncHandler(async (req, res) => {

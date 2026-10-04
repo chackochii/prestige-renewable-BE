@@ -49,6 +49,15 @@ export const NOTIFICATION_EVENTS = {
     "approvals.rejected": { label: "An approval was not given — back with sales", priority: "high" },
     "approvals.complete": { label: "All approvals received — start procurement", priority: "high" },
 
+    // Procurement & delivery, stage 6 (modules/opportunity/service/procurementService).
+    "procurement.started": { label: "Job entered procurement — BOQ to verify", priority: "high" },
+    "procurement.variation.approval_requested": { label: "Price variation needs your approval", priority: "high" },
+    "procurement.variation.reminder": { label: "Price variation approval still outstanding", priority: "high" },
+    "procurement.variation.decided": { label: "Price variation approved or declined", priority: "medium" },
+    "procurement.approvals.complete": { label: "Variation approved — release the purchase orders", priority: "high" },
+    "procurement.delivery.discrepancy": { label: "Delivery arrived missing, incorrect or damaged", priority: "high" },
+    "procurement.green_deal.created": { label: "Green Deal job created — ready for construction", priority: "high" },
+
     // The customer and their proposal link (modules/opportunity/service/proposalService).
     "proposal.viewed": { label: "Customer opened their proposal", priority: "low" },
     "proposal.accepted": { label: "Customer accepted the proposal", priority: "high" },

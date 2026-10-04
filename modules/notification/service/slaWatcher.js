@@ -13,6 +13,7 @@ import logger from "../../../utils/logger.js";
 import { notify } from "./notificationService.js";
 import { assignedUserIds, customerLabel } from "../../opportunity/service/opportunityPeople.js";
 import { overdueRequests } from "../../collaboration/service/collaborationService.js";
+import { remindPendingApprovals } from "../../opportunity/service/procurementService.js";
 
 const { Opportunity } = db;
 
@@ -108,7 +109,9 @@ export const startSlaWatcher = () => {
         if (running) return;
         running = true;
         try {
-            const raised = (await runSlaCheck()) + (await runOverdueRequestCheck());
+            // Price variations still waiting on an approver get the chart's
+            // "frequent high-priority notification" — once a day per person.
+            const raised = (await runSlaCheck()) + (await runOverdueRequestCheck()) + (await remindPendingApprovals());
             if (raised) logger.info(`SLA watcher: ${raised} overdue notification(s) raised`);
         } catch (err) {
             // A laptop that slept, a dropped VPN, a database that is briefly

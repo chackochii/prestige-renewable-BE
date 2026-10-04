@@ -7,6 +7,7 @@ import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 import { isEstimationReady, preSiteInspectionBlocker } from "./estimationService.js";
+import { PROCUREMENT_STAGE, enterProcurement, procurementBlocker } from "./procurementService.js";
 import { quoteHasItems } from "./quoteService.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
@@ -17,6 +18,7 @@ import { sanitizeEstimationInput } from "./estimationInput.js";
 import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, installedSystemSummary, sanitizeRequiredApprovals } from "./approvalsService.js";
 import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteService.js";
 import { advancePermissionFor, isStageNumber, LAST_STAGE, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
+import { pagingOf } from "../../../utils/pagination.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -212,24 +214,70 @@ export const searchCondition = (search) => {
     const term = `%${String(search).trim().replace(/[\\%_]/g, "\\$&")}%`;
     return {
         [Op.or]: [
-            { number: { [Op.iLike]: term } },
-            { customerLegalName: { [Op.iLike]: term } },
-            { customerTradingName: { [Op.iLike]: term } },
-            { siteSuburb: { [Op.iLike]: term } },
-        ],
+            "number", "customerLegalName", "customerTradingName", "customerFirstName", "customerLastName",
+            "customerEmail", "customerPhone", "siteSuburb",
+        ].map((field) => ({ [field]: { [Op.iLike]: term } })),
     };
 };
 
-export const listOpportunities = async ({
-    businessUnitId,
-    stage,
-    lifecycle,
-    qualification,
-    ownerId,
-    search,
-    page = 1,
-    pageSize = 50,
-} = {}, actor = null) => {
+/**
+ * The pipeline card's status (prestige-fe helpers/jobStatus.js) as SQL, so the
+ * Pipeline's status filter covers every job and not just the page on screen.
+ * One status per job, in the card's order of precedence: blocked, re-quote,
+ * new, variation, referral, otherwise none. COALESCE keeps every test true or
+ * false, so NOT (…) never meets a NULL.
+ */
+const STATUS_TESTS = {
+    blocked: "COALESCE(stage = 2 AND ((estimation_pre_site_inspection_required IS TRUE AND estimation_site_visit_completed IS NOT TRUE) OR estimation_client_info_needed IS TRUE), FALSE)",
+    requote: "COALESCE(stage = 2 AND requote_requested_at IS NOT NULL, FALSE)",
+    new: "COALESCE(stage = 1 AND salesperson_id IS NULL, FALSE)",
+    variation: "COALESCE(variation_pending IS TRUE, FALSE)",
+    referral: "COALESCE(lead_source = 'referrer', FALSE)",
+};
+const STATUS_ORDER = ["blocked", "requote", "new", "variation", "referral"];
+export const JOB_STATUSES = [...STATUS_ORDER, "none"];
+
+const statusCondition = (status) => {
+    if (!JOB_STATUSES.includes(status)) throw httpError(400, `status must be one of: ${JOB_STATUSES.join(", ")}`);
+    const at = status === "none" ? STATUS_ORDER.length : STATUS_ORDER.indexOf(status);
+    const tests = [...(status === "none" ? [] : [STATUS_TESTS[status]]), ...STATUS_ORDER.slice(0, at).map((key) => `NOT ${STATUS_TESTS[key]}`)];
+    return sequelize.literal(`(${tests.join(" AND ")})`);
+};
+
+/**
+ * The Quotes page's figures across every matching record: how many, the value
+ * quoted (the accepted value where there is one, the estimate otherwise), and
+ * what has been accepted — at approvals or beyond, or won / closed.
+ */
+const totalsFor = async (where) => {
+    const accepted = `stage >= ${APPROVALS_STAGE} OR lifecycle IN ('Won', 'Closed')`;
+    const [row] = await Opportunity.findAll({
+        where,
+        attributes: [
+            [sequelize.literal("COUNT(*)"), "count"],
+            [sequelize.literal("COALESCE(SUM(COALESCE(NULLIF(accepted_value, 0), estimated_value, 0)), 0)"), "value"],
+            [sequelize.literal(`COUNT(*) FILTER (WHERE ${accepted})`), "acceptedCount"],
+            [sequelize.literal(`COALESCE(SUM(accepted_value) FILTER (WHERE ${accepted}), 0)`), "acceptedValue"],
+        ],
+        raw: true,
+    });
+    return {
+        count: Number(row?.count) || 0,
+        value: Number(row?.value) || 0,
+        acceptedCount: Number(row?.acceptedCount) || 0,
+        acceptedValue: Number(row?.acceptedValue) || 0,
+    };
+};
+
+/**
+ * The opportunities of one business unit, a page at a time, newest first
+ * (most recently created at the top, so a new lead is always on page 1).
+ * Filters, all optional: stage, minStage, lifecycle, qualification, ownerId,
+ * authorId (who captured it), status (the pipeline card's), search.
+ * totals=1 adds the Quotes page's figures across every matching record.
+ */
+export const listOpportunities = async (query = {}, actor = null) => {
+    const { businessUnitId, stage, minStage, lifecycle, qualification, ownerId, authorId, status, search } = query;
     const where = { businessUnitId: parseId(businessUnitId, "business unit id") };
 
     // A stage somebody cannot read must not reach them as a record, a count or
@@ -252,6 +300,11 @@ export const listOpportunities = async ({
     // Search and owner each need their own OR, so they are combined under AND
     // rather than both writing to where[Op.or] and the second winning.
     const conditions = [];
+    if (minStage !== undefined && minStage !== null && minStage !== "") {
+        const from = Number(minStage);
+        if (!isStageNumber(from)) throw httpError(400, `minStage must be 1–${LAST_STAGE}`);
+        conditions.push({ stage: { [Op.gte]: from } });
+    }
     const matching = searchCondition(search);
     if (matching) conditions.push(matching);
     // The board's owner filter: whoever is carrying the record, which is the
@@ -260,17 +313,23 @@ export const listOpportunities = async ({
         const owner = parseId(ownerId, "ownerId");
         conditions.push({ [Op.or]: [{ salespersonId: owner }, { leadOwnerId: owner }] });
     }
+    // Who captured it: the record keeps that as the lead owner (helpers/jobStatus.js createdById).
+    if (authorId) conditions.push({ leadOwnerId: parseId(authorId, "authorId") });
+    if (status) conditions.push(statusCondition(String(status)));
     if (conditions.length) where[Op.and] = conditions;
 
-    const limit = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
-    const currentPage = Math.max(Number(page) || 1, 1);
-    const { rows, count } = await Opportunity.findAndCountAll({
-        where,
-        order: [["updatedAt", "DESC"]],
-        limit,
-        offset: (currentPage - 1) * limit,
-    });
-    return { rows, total: count, page: currentPage, pageSize: limit };
+    const paging = pagingOf(query, { defaultSize: 50, maxSize: 200 });
+    const [{ rows, count }, totals] = await Promise.all([
+        Opportunity.findAndCountAll({
+            where,
+            // Newest first; the id keeps records created in the same instant in a fixed order across pages.
+            order: [["createdAt", "DESC"], ["id", "DESC"]],
+            limit: paging.limit,
+            offset: paging.offset,
+        }),
+        query.totals === "1" || query.totals === "true" || query.totals === true ? totalsFor(where) : null,
+    ]);
+    return { rows, total: count, page: paging.page, pageSize: paging.pageSize, ...(totals ? { totals } : {}) };
 };
 
 // The detail payload: the record, its people, its documents (with the
@@ -523,6 +582,13 @@ export const advanceStage = async (id, actor, message = {}) => {
         if (waiting.length) throw httpError(400, `Waiting on approvals: ${waiting.map((row) => row.label).join(", ")}`);
     }
 
+    // Leaving procurement needs the materials confirmed ready and the Green
+    // Deal job created — the coordinator's CL-14 and CL-10.
+    if (opportunity.stage === PROCUREMENT_STAGE) {
+        const blocker = await procurementBlocker(opportunity);
+        if (blocker) throw httpError(400, blocker);
+    }
+
     const from = opportunity.stage;
     const moved = await moveToNextStage(opportunity, actor, message);
     // A job sent back for a re-quote returns to proposal through here (the
@@ -570,6 +636,9 @@ export const moveToNextStage = async (opportunity, actor = null, { byline = null
     // Arriving at approvals sets up the approvals the job needs and tells the
     // coordinators (and finance) what there is to lodge.
     if (next === APPROVALS_STAGE) await enterApprovals(opportunity, actor);
+    // Arriving at procurement seeds the BOQ from the accepted quote and tells
+    // the coordinators there is one to verify.
+    if (next === PROCUREMENT_STAGE) await enterProcurement(opportunity, actor);
 
     return getOpportunity(opportunity.id);
 };

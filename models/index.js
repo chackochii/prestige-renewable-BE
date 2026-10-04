@@ -27,6 +27,7 @@ import defineRequoteRequest from "../modules/opportunity/model/requoteRequest.js
 import defineVariation from "../modules/opportunity/model/variation.js";
 import defineApproval from "../modules/opportunity/model/approval.js";
 import definePurchaseOrder from "../modules/opportunity/model/purchaseOrder.js";
+import defineProcurementJob from "../modules/opportunity/model/procurementJob.js";
 import defineSiteWorkSubstage from "../modules/opportunity/model/siteWorkSubstage.js";
 import defineRebate from "../modules/opportunity/model/rebate.js";
 import defineBillingRequest from "../modules/billing/model/billingRequest.js";
@@ -75,6 +76,7 @@ db.Variation = defineVariation(sequelize, DataTypes);
 // Delivery
 db.Approval = defineApproval(sequelize, DataTypes);
 db.PurchaseOrder = definePurchaseOrder(sequelize, DataTypes);
+db.ProcurementJob = defineProcurementJob(sequelize, DataTypes);
 db.SiteWorkSubstage = defineSiteWorkSubstage(sequelize, DataTypes);
 db.Rebate = defineRebate(sequelize, DataTypes);
 
@@ -122,6 +124,7 @@ export const {
     Variation,
     Approval,
     PurchaseOrder,
+    ProcurementJob,
     SiteWorkSubstage,
     Rebate,
     BillingRequest,

@@ -29,6 +29,7 @@ import { customerLabel } from "./opportunityPeople.js";
 import { getOpportunity, moveToNextStage, searchCondition } from "./opportunityService.js";
 import { readableStages } from "./stageAccess.js";
 import { APPROVAL_STATUSES } from "../model/approval.js";
+import { newestFirst, pageOf, pagingOf } from "../../../utils/pagination.js";
 
 const { Opportunity, Approval, BusinessUnit, User, Proposal, QuoteVersion, OpportunityHistory, Notification } = db;
 
@@ -198,7 +199,8 @@ const existingSystemOf = (opportunity) => {
     );
 };
 
-const siteOf = (opportunity) =>
+/** "14 Wharf Rd, Birchgrove NSW 2041" — shared with procurement's presenter. */
+export const siteOf = (opportunity) =>
     [opportunity.siteLine1, [opportunity.siteSuburb, opportunity.siteState, opportunity.sitePostcode].filter(Boolean).join(" ")].filter(Boolean).join(", ") || null;
 
 const presentItem = (row) => ({
@@ -276,7 +278,8 @@ const presentJob = (opportunity, { catalogue, rows, accepted, salesperson = null
     };
 };
 
-const acceptedProposalsFor = async (opportunityIds) => {
+/** The accepted proposal of each job, with the quote version it was for — shared with procurement. */
+export const acceptedProposalsFor = async (opportunityIds) => {
     const rows = await Proposal.findAll({
         where: { opportunityId: { [Op.in]: opportunityIds }, status: "accepted" },
         include: [{ model: QuoteVersion, as: "quoteVersion", attributes: ["id", "version", "quoteNumber", "grandTotal", "snapshot"] }],
@@ -355,13 +358,31 @@ export const listApprovals = async (id) => {
 };
 
 /**
- * The approvals page: every active job at the stage, plus jobs that moved on
- * in the last 30 days (so "ready for procurement" does not vanish the moment
- * it is). Narrowed to the stages the person may read. Each row is the whole
- * job as the detail view reads it — history and notices included — so the
- * page is one request and opening a job is none.
+ * The chart's "All approved?" answer from a job's approval rows (mirrors
+ * prestige-fe helpers/approvals.js approvalOutcome): rejected as soon as one
+ * is not given, approved when every applicable one is, else pending.
  */
-export const approvalsBoard = async ({ businessUnitId, search } = {}, actor) => {
+const outcomeOf = (rows) => {
+    const applicable = rows.filter((row) => row.required && row.status !== "not_applicable");
+    if (!applicable.length) return "pending";
+    if (applicable.some((row) => row.status === "rejected")) return "rejected";
+    return applicable.every((row) => row.status === "approved") ? "approved" : "pending";
+};
+
+/**
+ * The approvals page, a page at a time: every active job at the stage, plus
+ * jobs that moved on in the last 30 days (so "ready for procurement" does not
+ * vanish the moment it is), narrowed to the stages the person may read —
+ * newest first, the job that reached approvals most recently at the top.
+ * `counts` carries the stat cards across the whole board (prestige-fe
+ * ApprovalsPage): pending and rejected at the stage, overdue (pending past its
+ * SLA), approved (every approval in, or moved on). Each row is the whole job
+ * as the detail view reads it, history and notices included, so opening one
+ * asks for nothing more; those are only looked up for the rows on the page.
+ */
+export const approvalsBoard = async (query = {}, actor) => {
+    const { businessUnitId, search } = query;
+    const paging = pagingOf(query);
     const unitId = parseId(businessUnitId, "business unit id");
     const allowed = await readableStages(actor);
     const since = new Date(Date.now() - 30 * 86400000);
@@ -376,35 +397,52 @@ export const approvalsBoard = async ({ businessUnitId, search } = {}, actor) => 
                 ...(matching ? [matching] : []),
             ],
         },
-        order: [["slaDueAt", "ASC"], ["updatedAt", "DESC"]],
-        limit: 200,
+        limit: 1000,
     });
-    if (!opportunities.length) return [];
+    const counts = { all: 0, pending: 0, approved: 0, rejected: 0, overdue: 0 };
+    if (!opportunities.length) return { rows: [], total: 0, page: paging.page, pageSize: paging.pageSize, counts };
 
-    const ids = opportunities.map((opportunity) => opportunity.id);
-    const [unit, rows, accepted, people, { history, notifications }] = await Promise.all([
+    const allRows = await rowsFor(opportunities.map((opportunity) => opportunity.id));
+    const rowsOf = new Map();
+    for (const row of allRows) rowsOf.set(row.opportunityId, [...(rowsOf.get(row.opportunityId) ?? []), row]);
+    const now = new Date();
+    const jobs = opportunities
+        // A job past the stage only belongs here if it went through it.
+        .filter((opportunity) => opportunity.stage === APPROVALS_STAGE || rowsOf.has(opportunity.id))
+        // Newest first: the job that reached the stage most recently at the top.
+        .sort(newestFirst((opportunity) => opportunity.slaStartedAt ?? opportunity.createdAt));
+    for (const opportunity of jobs) {
+        const outcome = outcomeOf(rowsOf.get(opportunity.id) ?? []);
+        counts.all += 1;
+        if (outcome === "approved" || opportunity.stage > APPROVALS_STAGE) counts.approved += 1;
+        else {
+            counts[outcome] += 1;
+            if (outcome === "pending" && opportunity.slaDueAt && new Date(opportunity.slaDueAt) < now) counts.overdue += 1;
+        }
+    }
+
+    const onPage = pageOf(jobs, paging);
+    if (!onPage.length) return { rows: [], total: jobs.length, page: paging.page, pageSize: paging.pageSize, counts };
+    const ids = onPage.map((opportunity) => opportunity.id);
+    const [unit, accepted, people, { history, notifications }] = await Promise.all([
         BusinessUnit.findByPk(unitId),
-        rowsFor(ids),
         acceptedProposalsFor(ids),
-        User.findAll({ where: { id: { [Op.in]: [...new Set(opportunities.map((o) => o.salespersonId).filter(Boolean))] } }, attributes: ["id", "name"] }),
+        User.findAll({ where: { id: { [Op.in]: [...new Set(onPage.map((o) => o.salespersonId).filter(Boolean))] } }, attributes: ["id", "name"] }),
         historyAndNoticesFor(ids),
     ]);
     const catalogue = catalogueFor(unit);
     const names = new Map(people.map((user) => [user.id, user]));
-    const hasRows = new Set(rows.map((row) => row.opportunityId));
-    return opportunities
-        // A job past the stage only belongs here if it went through it.
-        .filter((opportunity) => opportunity.stage === APPROVALS_STAGE || hasRows.has(opportunity.id))
-        .map((opportunity) =>
-            presentJob(opportunity, {
-                catalogue,
-                rows,
-                accepted: accepted.get(opportunity.id) ?? null,
-                salesperson: names.get(opportunity.salespersonId) ?? null,
-                history: history.get(opportunity.id) ?? [],
-                notifications: notifications.get(opportunity.id) ?? [],
-            })
-        );
+    const rows = onPage.map((opportunity) =>
+        presentJob(opportunity, {
+            catalogue,
+            rows: rowsOf.get(opportunity.id) ?? [],
+            accepted: accepted.get(opportunity.id) ?? null,
+            salesperson: names.get(opportunity.salespersonId) ?? null,
+            history: history.get(opportunity.id) ?? [],
+            notifications: notifications.get(opportunity.id) ?? [],
+        })
+    );
+    return { rows, total: jobs.length, page: paging.page, pageSize: paging.pageSize, counts };
 };
 
 // ---- Recording an approval ---------------------------------------------------------

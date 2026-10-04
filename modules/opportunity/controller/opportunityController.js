@@ -44,9 +44,9 @@ import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse, errorResponse } from "../../../utils/apiResponse.js";
 
 export const getAll = asyncHandler(async (req, res) => {
-    const { rows, total, page, pageSize } = await listOpportunities(req.query, req.user);
+    const { rows, total, page, pageSize, totals } = await listOpportunities(req.query, req.user);
 
-    successResponse(res, { data: rows, total, page, pageSize });
+    successResponse(res, { data: rows, total, page, pageSize, ...(totals ? { totals } : {}) });
 });
 
 export const getOne = asyncHandler(async (req, res) => {

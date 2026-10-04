@@ -5,8 +5,10 @@ import * as approvals from "../service/approvalsService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse } from "../../../utils/apiResponse.js";
 
+// ?businessUnitId=&search=&page=&pageSize= → { data, total, page, pageSize, counts }
 export const board = asyncHandler(async (req, res) => {
-    successResponse(res, { data: await approvals.approvalsBoard(req.query, req.user) });
+    const { rows, total, page, pageSize, counts } = await approvals.approvalsBoard(req.query, req.user);
+    successResponse(res, { data: rows, total, page, pageSize, counts });
 });
 
 export const list = asyncHandler(async (req, res) => {

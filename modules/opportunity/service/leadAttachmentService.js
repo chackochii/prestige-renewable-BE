@@ -53,6 +53,10 @@ export const ATTACHMENT_CATEGORIES = {
     bill: "energy_bill",
     document: "lead",
     client_document: "evidence", // what the client sends over during estimation
+    // Procurement & delivery: what the checklists attach (CL-12 quotes, CL-13 PO records, CL-14 receipts and photos).
+    supplier_quote: "supplier_quote",
+    purchase_order: "other",
+    delivery_receipt: "evidence",
 };
 const CATEGORY_BY_TYPE = Object.fromEntries(Object.entries(ATTACHMENT_CATEGORIES).map(([c, t]) => [t, c]));
 

@@ -46,6 +46,7 @@ import {
 import * as collaboration from "../modules/collaboration/controller/collaborationController.js";
 import * as proposals from "../modules/opportunity/controller/proposalController.js";
 import * as approvals from "../modules/opportunity/controller/approvalsController.js";
+import * as procurement from "../modules/opportunity/controller/procurementController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -81,6 +82,8 @@ router.use(tokenValidator);
 router.get("/proposals", read, requireUnitAccess((req) => req.query.businessUnitId), proposals.board); // ?businessUnitId=&search= → [{ opportunity, latestQuoteVersion, proposal, proposalCount }]
 // The approvals page: stage-5 jobs with their required approvals (plus ones that moved on in the last 30 days).
 router.get("/approvals", requirePermission("approvals.read"), requireUnitAccess((req) => req.query.businessUnitId), approvals.board); // ?businessUnitId=&search= → [job]
+// The procurement page: stage-6 jobs, whole (plus ones that moved on in the last 30 days).
+router.get("/procurement", requirePermission("procurement.read"), requireUnitAccess((req) => req.query.businessUnitId), procurement.board); // ?businessUnitId=&search= → [job]
 
 // Deny-by-default unit scoping (ADM excepted): a caller only reaches records
 // in the business units they are assigned to. Every /:id/... route below is
@@ -119,6 +122,22 @@ router.get("/:id/approvals", requireAnyPermission("approvals.read", "leads.read"
 router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...] } → the opportunity; ?view=approvals → the job's approvals
 router.patch("/:id/approvals/:type", requirePermission("approvals.update"), approvals.update); // { status?, authority?, reference?, submittedAt?, decidedAt?, note?, documentName?, checklist? } → the job's approvals
 
+// Procurement & delivery (stage 6). The Operations Coordinator works the BOQ,
+// quotes, orders and checklists (procurement.update); the Procurement Manager
+// signs the items marked theirs (procurement.approve); the sales manager and
+// the business owner answer for a price variation (their roles, checked in the
+// service). Every write returns the whole job.
+const procure = requirePermission("procurement.update");
+router.get("/:id/procurement", requireAnyPermission("procurement.read", "leads.read", "estimation.read", "approvals.read"), procurement.getOne);
+router.patch("/:id/procurement/checklist/:section", requireAnyPermission("procurement.update", "procurement.approve"), procurement.checklist); // { patch: { key: answer } } — section: boq | quote | po | receipt | jobCreation
+router.put("/:id/procurement/boq", procure, procurement.boq); // { lines: [{ key, siteQty?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }], add?, remove?, revise?, reason? }
+router.post("/:id/procurement/quotes", procure, procurement.addQuote); // { supplier, total, validUntil?, receivedAt?, note? }
+router.delete("/:id/procurement/quotes/:index", procure, procurement.removeQuote);
+router.post("/:id/procurement/purchase-orders", procure, procurement.createPurchaseOrder); // { supplier, lines, total?, deliveryEta? } → draft
+router.patch("/:id/procurement/purchase-orders/:poId", procure, procurement.updatePurchaseOrder); // { status?, supplier?, lines?, total?, deliveryEta?, scheduledFor?, deliveredAt?, receivedBy? }
+router.delete("/:id/procurement/purchase-orders/:poId", procure, procurement.deletePurchaseOrder); // drafts only
+router.post("/:id/procurement/approvals/:role/decision", requireAnyPermission("procurement.read", "leads.read", "estimation.read"), procurement.decideVariation); // { outcome: approved | rejected, note? } — role: SMM | BO
+
 // Job history: notes people add plus system events (assignments, notifications).
 router.get("/:id/history", readAny, getHistory);
 router.post("/:id/history", requireAnyPermission("leads.update", "estimation.update"), createHistoryEntry); // { note }
@@ -128,11 +147,12 @@ router.get("/:id/meetings", readAny, getMeetings);
 router.post("/:id/meetings", write, createMeeting); // { attendees, outcome?, nextStep?, at? } → the entry
 router.delete("/:id/meetings/:meetingId", write, deleteMeeting);
 
-// Attachments as the lead/estimation screens see them: one file per request
-// with a category (photo | sketch | bill | document | client_document); each
-// comes back with a URL the browser can open directly.
-router.get("/:id/attachments", readAny, getAttachments);
-router.post("/:id/attachments", requireAnyPermission("leads.update", "estimation.update"), uploadSingleFile, createAttachment); // multipart: file + category
+// Attachments as the lead/estimation/procurement screens see them: one file
+// per request with a category (photo | sketch | bill | document |
+// client_document | supplier_quote | purchase_order | delivery_receipt);
+// each comes back with a URL the browser can open directly.
+router.get("/:id/attachments", requireAnyPermission("leads.read", "estimation.read", "procurement.read"), getAttachments);
+router.post("/:id/attachments", requireAnyPermission("leads.update", "estimation.update", "procurement.update", "procurement.approve"), uploadSingleFile, createAttachment); // multipart: file + category
 
 // Generic documents (type, stage, label) for every pipeline stage.
 router.get("/:id/documents", readAny, getDocuments);
