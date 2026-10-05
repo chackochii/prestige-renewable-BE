@@ -15,6 +15,15 @@ export const submitTask = asyncHandler(async (req, res) => {
     successResponse(res, { data: await siteVisits.submitPublicTask(req.params.token, req.body) });
 });
 
+/**
+ * Runs before the upload parser: a link that does not exist, was withdrawn or
+ * has been submitted answers here, so its body is never read into memory.
+ */
+export const requireUploadableForm = asyncHandler(async (req, res, next) => {
+    await siteVisits.assertTakingUploads(req.params.token);
+    next();
+});
+
 export const uploadPhoto = asyncHandler(async (req, res) => {
     const photo = await siteVisits.uploadPublicPhoto(req.params.token, req.file, req.body?.documentKey);
     successResponse(res, { data: photo }, 201);

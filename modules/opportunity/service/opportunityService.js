@@ -19,6 +19,7 @@ import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, installedSystemSum
 import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteService.js";
 import { advancePermissionFor, isStageNumber, LAST_STAGE, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 import { pagingOf } from "../../../utils/pagination.js";
+import { unitYear2 } from "../../../utils/unitTime.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -186,7 +187,9 @@ const lockNumbering = (unit, transaction) =>
 // Soft-deleted rows keep their number, so the scan is unscoped by paranoid to
 // avoid reuse. Must be called with the numbering lock held (see createLead).
 const nextNumber = async (unit, transaction) => {
-    const year = String(new Date().getFullYear()).slice(-2);
+    // The year where the unit is: a lead taken on 1 January in Sydney is that
+    // year's, whatever the server's clock says.
+    const year = unitYear2(unit);
     const prefix = `${unit.code}-${year}-`;
     const last = await Opportunity.findOne({
         where: { number: { [Op.like]: `${prefix}%` } },
@@ -433,7 +436,14 @@ const assertQualificationConsistent = (fields) => {
     if (fields.qualification !== undefined && fields.qualification !== "disqualified") fields.notPotentialReason = null;
 };
 
-export const createLead = async (payload = {}, actor) => {
+/**
+ * `findDuplicate(transaction)`, when given, runs inside the transaction once
+ * the unit's numbering lock is held, so two identical creates cannot both miss
+ * each other: the second waits for the first to commit, then finds it. When it
+ * returns a record nothing is created, and the error thrown carries that
+ * record as `duplicate` (the public form answers with its number).
+ */
+export const createLead = async (payload = {}, actor, { findDuplicate = null } = {}) => {
     const unit = await BusinessUnit.findByPk(parseId(payload.businessUnitId, "business unit id"));
     if (!unit) throw httpError(404, "Business unit not found");
 
@@ -454,6 +464,8 @@ export const createLead = async (payload = {}, actor) => {
     // same unit queue up and each gets a distinct number.
     const opportunity = await sequelize.transaction(async (transaction) => {
         await lockNumbering(unit, transaction);
+        const duplicate = findDuplicate ? await findDuplicate(transaction) : null;
+        if (duplicate) throw Object.assign(httpError(409, `This lead already exists as ${duplicate.number}`), { duplicate });
         return Opportunity.create(
             {
                 ...fields,
@@ -484,8 +496,18 @@ export const updateLead = async (id, payload = {}, actor) => {
     if (fields.qualification === "qualified" && opportunity.qualification !== "qualified")
         await assertCanQualify({ ...opportunity.get({ plain: true }), ...fields });
     assertQualificationConsistent(fields);
-    fields.leadSource = fields.leadSource ?? opportunity.leadSource;
-    await normalizeSource(fields);
+    // The source is only checked when the request changes it. Edits send just
+    // the fields that changed, so a save that leaves the source alone must not
+    // be refused for a referrer it did not mention — nor reset the commission
+    // tier, nor fail on a source an integration set.
+    if (["leadSource", "referrerId", "involvementTier"].some((key) => fields[key] !== undefined)) {
+        fields.leadSource = fields.leadSource ?? opportunity.leadSource;
+        if (fields.leadSource === "referrer") {
+            if (fields.referrerId === undefined) fields.referrerId = opportunity.referrerId;
+            if (fields.involvementTier === undefined) fields.involvementTier = opportunity.involvementTier;
+        }
+        await normalizeSource(fields);
+    }
     if (fields.estimatorId !== undefined)
         fields.estimatorId = await assertUserExists(fields.estimatorId, "estimator");
     if (fields.salespersonId !== undefined)

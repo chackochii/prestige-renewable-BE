@@ -36,8 +36,9 @@ import { VARIATION_ESCALATION_PERCENT, variationApproverRoles } from "./approval
 import { acceptedProposalsFor, siteOf } from "./approvalsService.js";
 import { PURCHASE_ORDER_STATUSES } from "../model/purchaseOrder.js";
 import { newestFirst, pageOf, pagingOf } from "../../../utils/pagination.js";
+import { unitYear2 } from "../../../utils/unitTime.js";
 
-const { Opportunity, ProcurementJob, PurchaseOrder, User, OpportunityHistory, Notification } = db;
+const { Opportunity, BusinessUnit, ProcurementJob, PurchaseOrder, User, OpportunityHistory, Notification } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -730,10 +731,10 @@ export const removeQuote = async (id, index, actor) => {
 
 // ---- Purchase orders --------------------------------------------------------------------
 
-/** PO-26-0112: the year, then a running number across every unit. */
-const nextPurchaseOrderNumber = async () => {
-    const count = await PurchaseOrder.count();
-    return `PO-${String(new Date().getFullYear()).slice(-2)}-${String(count + 1).padStart(4, "0")}`;
+/** PO-26-0112: the year where the job's unit is, then a running number across every unit. */
+const nextPurchaseOrderNumber = async (opportunity) => {
+    const [count, unit] = await Promise.all([PurchaseOrder.count(), BusinessUnit.findByPk(opportunity.businessUnitId, { attributes: ["id", "timezone"] })]);
+    return `PO-${unitYear2(unit)}-${String(count + 1).padStart(4, "0")}`;
 };
 
 const loadPurchaseOrder = async (opportunity, poId) => {
@@ -769,7 +770,7 @@ export const createPurchaseOrder = async (id, payload = {}, actor) => {
     const total = payload.total === undefined || payload.total === null || payload.total === "" ? quotedCostOf(row, lines) : nonNegative(payload.total, "total");
     const po = await PurchaseOrder.create({
         opportunityId: opportunity.id,
-        ref: await nextPurchaseOrderNumber(),
+        ref: await nextPurchaseOrderNumber(opportunity),
         supplier,
         lines,
         amount: total,

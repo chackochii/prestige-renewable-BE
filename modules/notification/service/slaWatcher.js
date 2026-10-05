@@ -10,12 +10,16 @@
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import logger from "../../../utils/logger.js";
+import { unitDate } from "../../../utils/unitTime.js";
 import { notify } from "./notificationService.js";
 import { assignedUserIds, customerLabel } from "../../opportunity/service/opportunityPeople.js";
 import { overdueRequests } from "../../collaboration/service/collaborationService.js";
 import { remindPendingApprovals } from "../../opportunity/service/procurementService.js";
 
-const { Opportunity } = db;
+const { Opportunity, BusinessUnit } = db;
+
+/** unit id → its timezone, one query per pass, so a notice quotes the due date as the unit's calendar has it. */
+const unitZones = async () => new Map((await BusinessUnit.findAll({ attributes: ["id", "timezone"] })).map((unit) => [unit.id, unit.timezone]));
 
 // Once a day: SLA breaches and overdue requests are measured in days, so
 // checking more often only repeats work the dedupe key would discard anyway.
@@ -51,6 +55,7 @@ export const runSlaCheck = async () => {
     });
 
     let raised = 0;
+    const zones = overdue.length ? await unitZones() : new Map();
     for (const opportunity of overdue) {
         const userIds = assignedUserIds(opportunity);
         if (!userIds.length) continue;
@@ -59,7 +64,7 @@ export const runSlaCheck = async () => {
         const { created } = await notify({
             event: "sla.overdue",
             title: `${opportunity.number} is past its SLA`,
-            body: `${customerLabel(opportunity)} — stage ${opportunity.stage} was due ${due.toISOString().slice(0, 10)}, ${days} day${days === 1 ? "" : "s"} ago.`,
+            body: `${customerLabel(opportunity)} — stage ${opportunity.stage} was due ${unitDate(zones.get(opportunity.businessUnitId), due)}, ${days} day${days === 1 ? "" : "s"} ago.`,
             userIds,
             opportunity,
             dedupeKey: `sla:${opportunity.id}:${due.toISOString()}`,
@@ -75,12 +80,13 @@ export const runOverdueRequestCheck = async () => {
     const overdue = await overdueRequests(since);
 
     let raised = 0;
+    const zones = overdue.length ? await unitZones() : new Map();
     for (const request of overdue) {
         const due = new Date(request.dueAt);
         const { created } = await notify({
             event: "request.overdue",
             title: `${request.kind === "assignment" ? "ASG" : "REQ"}-${request.id} is past its due date`,
-            body: `"${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""} was due ${due.toISOString().slice(0, 10)}.`,
+            body: `"${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""} was due ${unitDate(zones.get(request.businessUnitId), due)}.`,
             userIds: [request.assigneeId],
             businessUnitId: request.businessUnitId,
             opportunity: request.opportunity,

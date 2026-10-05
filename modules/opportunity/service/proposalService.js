@@ -38,6 +38,8 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 
 /** How long a link can be answered — the same 30 days the quote is valid for. */
 export const LINK_DAYS = 30;
+/** A second send of the same version to the same address by the same person within this is a repeat, not a new proposal. */
+const REPEAT_SEND_WINDOW_MS = 60 * 1000;
 const PROPOSAL_STAGE = 3;
 
 // ---- Small helpers ----------------------------------------------------------
@@ -163,8 +165,37 @@ export const sendProposal = async (id, payload = {}, actor, { linkBase } = {}) =
     const message = multiLine(payload.message, 5000) || null;
 
     const token = newToken();
+    // Built before anything is saved: if the link cannot be made, nothing is
+    // created, so a retry is a fresh send rather than a "repeat" of a proposal
+    // whose link the sender never got.
+    const link = linkFor(token, linkBase);
     const now = new Date();
     const proposal = await sequelize.transaction(async (transaction) => {
+        // Sends to one job queue up on its row: without the lock, two at once
+        // each withdraw what they can see (not each other) and both links stay
+        // live, or both take the same version number and one fails.
+        const current = await Opportunity.findByPk(opportunity.id, { transaction, lock: transaction.LOCK.UPDATE });
+        if (current.lifecycle !== "Active" || current.stage !== PROPOSAL_STAGE)
+            throw httpError(409, "This job has moved on from the proposal stage — refresh to see where it is");
+        // The same send made a moment ago (a double click, a retried request)
+        // is not a new proposal. Making one would withdraw the link in the
+        // email that has just opened, so the customer would get a dead link.
+        const repeat = await Proposal.findOne({
+            where: {
+                opportunityId: opportunity.id,
+                status: "issued",
+                quoteVersionId: quoteVersion.id,
+                sentTo: to,
+                sentById: actor?.id ?? null,
+                issuedAt: { [Op.gte]: new Date(now.getTime() - REPEAT_SEND_WINDOW_MS) },
+            },
+            transaction,
+        });
+        if (repeat)
+            throw httpError(
+                409,
+                `Proposal ${repeat.number} was prepared for ${to} a moment ago — use the email that opened for it, or resend it if that email was closed`
+            );
         // One answerable link at a time: anything still open is replaced.
         await Proposal.update(
             { status: "withdrawn" },
@@ -193,7 +224,6 @@ export const sendProposal = async (id, payload = {}, actor, { linkBase } = {}) =
         );
     });
 
-    const link = linkFor(token, linkBase);
     await recordSystemEvent(
         opportunity,
         `Proposal ${proposal.number} (quote ${quoteNumber} v${quoteVersion.version}, ${money(proposal.grandTotal)}) prepared for ${to} and opened in the sender's email.`,

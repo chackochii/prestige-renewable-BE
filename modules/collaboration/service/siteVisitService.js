@@ -16,6 +16,7 @@ import path from "node:path";
 import db from "../../../models/index.js";
 import storage from "../../../utils/storage.js";
 import { parseId } from "../../../utils/ids.js";
+import { unitDate } from "../../../utils/unitTime.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { MIME_BY_EXTENSION, extensionOf } from "../../opportunity/service/leadAttachmentService.js";
 import { SITE_PHOTOS_KEY, fieldsToCheck } from "./inspectionForm.js";
@@ -40,7 +41,7 @@ import {
     sanitizeSubmission,
 } from "./siteVisitShape.js";
 
-const { CollaborationSiteVisit, CollaborationAttachment, CollaborationRequest, Opportunity, Quote } = db;
+const { BusinessUnit, CollaborationSiteVisit, CollaborationAttachment, CollaborationRequest, Opportunity, Quote } = db;
 
 const httpError = (status, message, errors) => Object.assign(new Error(message), { status, ...(errors ? { errors } : {}) });
 
@@ -198,6 +199,17 @@ const presentPublic = async (visit, request, photos) => {
     return presentPublicTask(visit, request, request.opportunity, photos, { quoteNumber: quote?.quoteNumber ?? null, sitePhotosKey: SITE_PHOTOS_KEY });
 };
 
+/**
+ * Throws unless the token names a form that still takes files — the same
+ * answer uploadPublicPhoto gives, but asked before the multipart body is read,
+ * so a made-up or spent link is refused without parsing (or holding) a byte
+ * of what was sent with it.
+ */
+export const assertTakingUploads = async (token) => {
+    const { visit } = await loadByToken(token);
+    if (visit.status === "submitted") throw httpError(409, "This form has been submitted — no more files can be added.");
+};
+
 /** What the person attending has been asked for. */
 export const getPublicTask = async (token) => {
     const { visit, request } = await loadByToken(token);
@@ -218,9 +230,11 @@ export const submitPublicTask = async (token, body) => {
         contactRequired: !(visit.assigneeId || visit.assigneeEmail || visit.assigneePhone),
     });
     if (errors.length) throw httpError(400, errors[0].message, errors);
-    // Filled in by the form itself, never typed: who signed, and the day it was sent.
+    // Filled in by the form itself, never typed: who signed, and the day it was
+    // sent — that day where the unit is, not in UTC.
     clean.fields.signedBy = clean.name;
-    clean.fields.submittedOn = new Date().toISOString().slice(0, 10);
+    const unit = await BusinessUnit.findByPk(request.businessUnitId, { attributes: ["id", "timezone"] });
+    clean.fields.submittedOn = unitDate(unit);
 
     const submittedAt = new Date();
     await visit.update({ status: "submitted", submittedAt, response: clean });

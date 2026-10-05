@@ -48,8 +48,11 @@ const siteVisitSubmit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: perT
 
 router.get("/site-visits/:token", siteVisitRead, siteVisit.getTask); // → { status, title, siteAddress, requestedFields, requestedDocuments, photos, … }
 router.post("/site-visits/:token", siteVisitSubmit, siteVisit.submitTask); // { name, email?, phone?, fields } → the task, now submitted
-// Limited before multer, so a flood is refused before it is parsed.
-router.post("/site-visits/:token/photos", siteVisitUpload, uploadSingleFile, siteVisit.uploadPhoto); // multipart: file + documentKey → { id, filename, url, documentKey }
+// Nothing is parsed until the link is known to take files: the limit runs
+// first, then the token is checked (a made-up or spent link is refused
+// without its body being read), and only then does multer read the upload,
+// held to one 10 MB file and a few short fields (middleware/upload.js).
+router.post("/site-visits/:token/photos", siteVisitUpload, siteVisit.requireUploadableForm, uploadSingleFile, siteVisit.uploadPhoto); // multipart: file + documentKey → { id, filename, url, documentKey }
 router.get("/site-visits/:token/photos/:photoId", siteVisitRead, siteVisit.downloadPhoto);
 
 // ---- Proposal link ----------------------------------------------------------

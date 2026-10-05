@@ -168,8 +168,10 @@ const resolveUnit = async (code) => {
 };
 
 // The same person re-sending the form (double click, refresh, retry after a
-// network blip) should not create a second lead.
-const findRecentDuplicate = (unit, email) =>
+// network blip) should not create a second lead. Asked by createLead while it
+// holds the unit's numbering lock: two sends at once queue on that lock, so
+// the second one finds the lead the first just made.
+const findRecentDuplicate = (unit, email, transaction = null) =>
     Opportunity.findOne({
         where: {
             businessUnitId: unit.id,
@@ -179,6 +181,7 @@ const findRecentDuplicate = (unit, email) =>
         },
         order: [["createdAt", "DESC"]],
         attributes: ["id", "number"],
+        transaction,
     });
 
 /**
@@ -194,28 +197,33 @@ export const createPublicLead = async (body = {}) => {
 
     const unit = await resolveUnit(fields.businessUnit);
 
-    const duplicate = await findRecentDuplicate(unit, fields.email);
-    if (duplicate) return { number: duplicate.number, businessUnit: unit.code, duplicate: true };
-
-    const opportunity = await createLead(
-        {
-            businessUnitId: unit.id,
-            customerLegalName: fields.name,
-            customerEmail: fields.email,
-            customerPhone: fields.phone,
-            contactName: fields.name,
-            contactEmail: fields.email,
-            contactPhone: fields.phone,
-            siteLine1: fields.siteLine1 || null,
-            siteSuburb: fields.siteSuburb || null,
-            siteState: fields.siteState || null,
-            sitePostcode: fields.sitePostcode || null,
-            leadSource: "inbound",
-            leadSourceDetails: PUBLIC_LEAD_SOURCE_DETAILS,
-            notes: fields.message || null,
-        },
-        null
-    );
+    let opportunity;
+    try {
+        opportunity = await createLead(
+            {
+                businessUnitId: unit.id,
+                customerLegalName: fields.name,
+                customerEmail: fields.email,
+                customerPhone: fields.phone,
+                contactName: fields.name,
+                contactEmail: fields.email,
+                contactPhone: fields.phone,
+                siteLine1: fields.siteLine1 || null,
+                siteSuburb: fields.siteSuburb || null,
+                siteState: fields.siteState || null,
+                sitePostcode: fields.sitePostcode || null,
+                leadSource: "inbound",
+                leadSourceDetails: PUBLIC_LEAD_SOURCE_DETAILS,
+                notes: fields.message || null,
+            },
+            null,
+            { findDuplicate: (transaction) => findRecentDuplicate(unit, fields.email, transaction) }
+        );
+    } catch (err) {
+        // Sent twice: answer with the lead the first send made, as before.
+        if (err.duplicate) return { number: err.duplicate.number, businessUnit: unit.code, duplicate: true };
+        throw err;
+    }
 
     // Best effort: the lead exists either way, a failed notification only logs.
     try {

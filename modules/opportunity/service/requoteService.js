@@ -117,32 +117,24 @@ export const openRequoteFor = (opportunityId) =>
  * from the body count (what they said on the phone, in sales' words).
  * `estimatorId` defaults to the job's estimator.
  */
-export const requestRequote = async (id, payload = {}, actor) => {
-    const opportunity = await loadOpportunity(id);
+/**
+ * Whether the job can go back for a re-quote now. Asked once up front for a
+ * quick answer and again under the row lock inside the transaction, where it
+ * counts: the open round is checked first, so the second of two clicks hears
+ * "already with the estimator" rather than a stage error.
+ */
+const assertRequotable = async (opportunity, transaction = null) => {
+    if (await RequoteRequest.count({ where: { opportunityId: opportunity.id, status: "open" }, transaction }))
+        throw httpError(409, "A re-quote is already with the estimator");
     if (opportunity.lifecycle !== "Active") throw httpError(400, "Only active records can be sent back for a re-quote");
     if (opportunity.stage !== PROPOSAL_STAGE) throw httpError(400, "A re-quote is raised from the proposal stage");
-
-    const unit = await BusinessUnit.findByPk(opportunity.businessUnitId);
-    const enabled = (Array.isArray(unit?.enabledStages) ? unit.enabledStages : []).map(Number);
-    if (enabled.length && !enabled.includes(ESTIMATION_STAGE))
-        throw httpError(400, "Estimation is not enabled for this business unit, so there is nowhere to send a re-quote");
-    if (await RequoteRequest.count({ where: { opportunityId: opportunity.id, status: "open" } }))
-        throw httpError(409, "A re-quote is already with the estimator");
-    if (await Proposal.count({ where: { opportunityId: opportunity.id, status: "accepted" } }))
+    if (await Proposal.count({ where: { opportunityId: opportunity.id, status: "accepted" }, transaction }))
         throw httpError(409, "The customer has already accepted a proposal on this job");
+};
 
-    const comments = multiLine(payload.comments, 2000);
-    if (!comments) throw httpError(400, "Tell the estimator what to change (comments)");
-
-    const estimatorId = isBlank(payload.estimatorId) ? opportunity.estimatorId : payload.estimatorId;
-    if (isBlank(estimatorId)) throw httpError(400, "Pick the estimator to assign the re-quote to");
-    const estimator = await assertAssignable(estimatorId, opportunity, "estimator");
-    const estimatorChanged = opportunity.estimatorId !== estimator.id;
-
-    // The customer's own answer wins over anything typed here.
-    const latest = await Proposal.findOne({ where: { opportunityId: opportunity.id }, order: [["version", "DESC"]] });
-    const answered = latest && ["renegotiate", "rejected"].includes(latest.response) && latest.responseNote;
-    const customer = answered
+/** The customer's own answer to the latest proposal wins over anything typed here. */
+const customerSaid = (latest, payload) =>
+    latest && ["renegotiate", "rejected"].includes(latest.response) && latest.responseNote
         ? {
               customerMessage: latest.responseNote,
               customerName: latest.responseName,
@@ -156,9 +148,34 @@ export const requestRequote = async (id, payload = {}, actor) => {
               customerRespondedAt: null,
           };
 
+export const requestRequote = async (id, payload = {}, actor) => {
+    const opportunity = await loadOpportunity(id);
+    await assertRequotable(opportunity);
+
+    const unit = await BusinessUnit.findByPk(opportunity.businessUnitId);
+    const enabled = (Array.isArray(unit?.enabledStages) ? unit.enabledStages : []).map(Number);
+    if (enabled.length && !enabled.includes(ESTIMATION_STAGE))
+        throw httpError(400, "Estimation is not enabled for this business unit, so there is nowhere to send a re-quote");
+
+    const comments = multiLine(payload.comments, 2000);
+    if (!comments) throw httpError(400, "Tell the estimator what to change (comments)");
+
+    const estimatorId = isBlank(payload.estimatorId) ? opportunity.estimatorId : payload.estimatorId;
+    if (isBlank(estimatorId)) throw httpError(400, "Pick the estimator to assign the re-quote to");
+    const estimator = await assertAssignable(estimatorId, opportunity, "estimator");
+    const estimatorChanged = opportunity.estimatorId !== estimator.id;
+
     const now = new Date();
     const slaDays = Number(unit?.slaDays?.[ESTIMATION_STAGE] ?? 0);
-    const requote = await sequelize.transaction(async (transaction) => {
+    const { requote, latest, customer } = await sequelize.transaction(async (transaction) => {
+        // A double click, or two people at once: the job's row is locked, so
+        // the second request waits here until the first commits, then finds
+        // its round open and stops — one round, never two.
+        const current = await Opportunity.findByPk(opportunity.id, { transaction, lock: transaction.LOCK.UPDATE });
+        await assertRequotable(current, transaction);
+        const latest = await Proposal.findOne({ where: { opportunityId: opportunity.id }, order: [["version", "DESC"]], transaction });
+        const customer = customerSaid(latest, payload);
+
         // The customer's link stops accepting answers: the quote they saw is
         // being redone, and a revised proposal will bring a new link.
         await Proposal.update(
@@ -190,7 +207,7 @@ export const requestRequote = async (id, payload = {}, actor) => {
             },
             { transaction }
         );
-        return row;
+        return { requote: row, latest, customer };
     });
 
     const said = customer.customerMessage ? ` Customer's message: "${customer.customerMessage}"` : "";

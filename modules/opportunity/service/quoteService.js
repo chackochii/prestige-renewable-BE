@@ -3,10 +3,11 @@
 // and GST are derived by the client — nothing here stores a total.
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
+import { unitDate } from "../../../utils/unitTime.js";
 import { PROJECT_TYPES, TAX_TREATMENTS } from "../model/quote.js";
 import { COST_CALC_TYPES } from "../model/quoteCost.js";
 
-const { Opportunity, Quote, QuoteItem, QuoteCost, QuoteVersion, CatalogItem, User, sequelize } = db;
+const { Opportunity, BusinessUnit, Quote, QuoteItem, QuoteCost, QuoteVersion, CatalogItem, User, sequelize } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -88,10 +89,12 @@ export const createQuote = async (id, actor) => {
     if (!opportunity) throw httpError(404, "Opportunity not found");
     const existing = await findQuote(opportunity.id);
     if (existing) return presentQuote(existing, opportunity);
+    // Dated the day it is where the unit works, not in UTC.
+    const unit = await BusinessUnit.findByPk(opportunity.businessUnitId, { attributes: ["id", "timezone"] });
     await Quote.create({
         opportunityId: opportunity.id,
         quoteNumber: quoteNumberFor(opportunity),
-        quoteDate: new Date().toISOString().slice(0, 10),
+        quoteDate: unitDate(unit),
         createdById: actor?.id ?? null,
     });
     return presentQuote(await findQuote(opportunity.id), opportunity);

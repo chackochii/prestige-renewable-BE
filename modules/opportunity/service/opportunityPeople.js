@@ -1,7 +1,7 @@
 // Who is currently on the hook for a record. Used wherever "tell the people
 // working on this" is the rule — stage changes, won/lost, SLA breaches.
 
-const OWNER_FIELDS = [
+export const OWNER_FIELDS = [
     "leadOwnerId",
     "salespersonId",
     "estimatorId",
