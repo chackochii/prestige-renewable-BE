@@ -13,7 +13,7 @@ import logger from "../../../utils/logger.js";
 import { unitDate } from "../../../utils/unitTime.js";
 import { notify } from "./notificationService.js";
 import { assignedUserIds, customerLabel } from "../../opportunity/service/opportunityPeople.js";
-import { overdueRequests } from "../../collaboration/service/collaborationService.js";
+import { overdueRequests, requestLabel } from "../../collaboration/service/collaborationService.js";
 import { remindPendingApprovals } from "../../opportunity/service/procurementService.js";
 
 const { Opportunity, BusinessUnit } = db;
@@ -85,7 +85,7 @@ export const runOverdueRequestCheck = async () => {
         const due = new Date(request.dueAt);
         const { created } = await notify({
             event: "request.overdue",
-            title: `${request.kind === "assignment" ? "ASG" : "REQ"}-${request.id} is past its due date`,
+            title: `${requestLabel(request)} is past its due date`,
             body: `"${request.title}"${request.opportunity?.number ? ` on ${request.opportunity.number}` : ""} was due ${unitDate(zones.get(request.businessUnitId), due)}.`,
             userIds: [request.assigneeId],
             businessUnitId: request.businessUnitId,

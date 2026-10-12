@@ -22,6 +22,7 @@ import { QueryTypes } from "sequelize";
 import db from "../models/index.js";
 import { createLead } from "../modules/opportunity/service/opportunityService.js";
 import { getProcurementJob, requiredApprovers, variationPct } from "../modules/opportunity/service/procurementService.js";
+import { exGstTotalOf } from "../modules/opportunity/service/quoteService.js";
 
 const { sequelize, BusinessUnit, CatalogItem, Opportunity, OpportunityHistory, Quote, QuoteItem, QuoteCost, QuoteVersion, Proposal, Approval, ProcurementJob, PurchaseOrder, User } = db;
 
@@ -666,11 +667,12 @@ const workProcurement = async (opportunity, { step, variant, enteredAt }) => {
             approvals = roles.map((role) => {
                 const decided = signedOff || (step === "approvals" && variant === 3 && role === "SMM");
                 const person = role === "BO" ? ctx.owner : ctx.salesManager;
+                // Decided ones read as answered by phone — no approval request row behind them (requestId null).
                 return decided
-                    ? { role, approverId: person?.id ?? null, approver: person?.name ?? "Sales manager (by phone)", status: "approved", requestedAt, decidedAt: decidedAt.toISOString(), note: "Supplier price rise accepted — margin still above the floor" }
-                    : { role, approverId: null, approver: null, status: "pending", requestedAt, decidedAt: null, note: null };
+                    ? { role, approverId: person?.id ?? null, approver: person?.name ?? "Sales manager (by phone)", status: "approved", requestedAt, decidedAt: decidedAt.toISOString(), note: "Supplier price rise accepted — margin still above the floor", requestId: null }
+                    : { role, approverId: null, approver: null, status: "pending", requestedAt, decidedAt: null, note: null, requestId: null };
             });
-            await hist(`Approvals requested — ${Math.abs(actual) < 5 ? "below 5%" : "5% or more"}: ${roles.map((role) => (role === "BO" ? "Business owner" : "Sales manager")).join(" and ")}`, quotedAt);
+            await hist(`Approvals needed — ${Math.abs(actual) < 5 ? "below 5%" : "5% or more"}: ${roles.map((role) => (role === "BO" ? "Business owner" : "Sales manager")).join(" and ")}. Send each an approval request from the Approvals tab`, quotedAt);
             for (const entry of approvals.filter((candidate) => candidate.status === "approved"))
                 await hist(`${entry.role === "BO" ? "Business owner" : "Sales manager"} approved the price variation of ${actual > 0 ? "+" : ""}${actual.toFixed(1)}%`, decidedAt);
         }
@@ -709,11 +711,11 @@ const workProcurement = async (opportunity, { step, variant, enteredAt }) => {
         }
     }
 
-    // The checklists the coordinator has worked so far.
+    // The checklists the coordinator has worked so far. The variation approval
+    // is not an answer on CL-13: it is read from the approvals above.
     const poTotal = cents(orders.reduce((sum, po) => sum + Number(po.amount), 0));
-    const variationSigned = approvals.length > 0 && approvals.every((entry) => entry.status === "approved");
     if (step === "delivery")
-        checklist.po = { basisConfirmed: true, poAmountValue: poTotal || null, poAmountMatches: orders.length > 0, variationChecked: true, ...(variationSigned ? { variationApproved: true, variationApprovedBy: "Sales manager, by phone" } : {}), supplierConfirmed: orders.length > 0 };
+        checklist.po = { basisConfirmed: true, poAmountValue: poTotal || null, poAmountMatches: orders.length > 0, variationChecked: true, supplierConfirmed: orders.length > 0 };
     if (step === "green_deal" || step === "done") {
         const releasedOn = orders[0]?.sentAt ?? quotedAt;
         checklist.po = {
@@ -721,7 +723,6 @@ const workProcurement = async (opportunity, { step, variant, enteredAt }) => {
             poAmountValue: poTotal,
             poAmountMatches: true,
             variationChecked: true,
-            ...(variationSigned ? { variationApproved: true, variationApprovedBy: "Sales manager, by phone" } : {}),
             supplierConfirmed: true,
             deliveryConfirmed: true,
             termsConfirmed: true,
@@ -819,7 +820,12 @@ const buildJob = async (job) => {
     await note(opportunity.id, DEMO_NOTE, createdAt);
     if (salesperson) await note(opportunity.id, `Salesperson assigned: ${salesperson.name}`, plusDays(createdAt, 0.05), actor?.id);
     const system = designSystem(service);
-    const fields = { estimatedValue: Math.round(system.grandTotal / 100) * 100, customerBudget: Math.round((system.grandTotal * (0.85 + random() * 0.4)) / 500) * 500 };
+    // What the job is worth, without GST as the pipeline counts it: a rough
+    // sizing on a lead, the saved version's figure once there is one, and the
+    // accepted figure once a customer says yes (the same rule the app uses —
+    // quoteService.createVersion, proposalService.applyResponse).
+    const exGst = exGstTotalOf({ grandTotal: system.grandTotal, snapshot: { quote: { taxTreatment: "exclusive", gstRatePct: 10 } } });
+    const fields = { estimatedValue: Math.round(exGst / 100) * 100, customerBudget: Math.round((system.grandTotal * (0.85 + random() * 0.4)) / 500) * 500 };
     let slaStartedAt = createdAt;
     let lastActivity = createdAt;
 
@@ -864,6 +870,7 @@ const buildJob = async (job) => {
         if (job.stage === 2 && job.scenario >= 0.65) {
             const quotedAt = past(plusDays(estimationAt, Math.min(job.enteredAgo, 1) * 0.5 + 0.1));
             await writeQuote(opportunity, customer, system, { at: quotedAt, saved: job.scenario >= 0.85 });
+            if (job.scenario >= 0.85) fields.estimatedValue = exGst;
             if (job.scenario >= 0.85) await note(opportunity.id, `Quote ${opportunity.number.replace(/^([A-Z0-9]+)-/, "$1-Q-")} v1 saved — ${money(system.grandTotal)}`, quotedAt, ctx.people.estimator?.id);
             lastActivity = quotedAt;
         }
@@ -885,7 +892,8 @@ const buildJob = async (job) => {
         Object.assign(fields, {
             operationalCoordinatorId: ctx.coordinator?.id ?? null,
             requiredApprovals: keys,
-            acceptedValue: system.grandTotal,
+            estimatedValue: exGst,
+            acceptedValue: exGst,
             financeAssistance: keys.includes("finance") ? "yes" : "no",
             financeNotes: keys.includes("finance") ? "Wants to spread the cost — interested in a Brighte green loan over 5 years." : null,
             estimationInput: { inclusions: "Supply and installation, system design, DNSP application, 10-year workmanship warranty", exclusions: "Tree trimming, scaffolding above two storeys" },

@@ -124,19 +124,21 @@ router.patch("/:id/approvals/:type", requirePermission("approvals.update"), appr
 
 // Procurement & delivery (stage 6). The Operations Coordinator works the BOQ,
 // quotes, orders and checklists (procurement.update); the Procurement Manager
-// signs the items marked theirs (procurement.approve); the sales manager and
-// the business owner answer for a price variation (their roles, checked in the
-// service). Every write returns the whole job.
+// signs the items marked theirs (procurement.approve). A price variation is
+// approved through the collaboration module: the coordinator raises a request
+// of kind "approval" (POST /:id/collaboration/requests, department sales for
+// the sales manager or admin for the business owner) and the approver decides
+// it on POST /collaboration/requests/:id/decision. Every write returns the
+// whole job.
 const procure = requirePermission("procurement.update");
 router.get("/:id/procurement", requireAnyPermission("procurement.read", "leads.read", "estimation.read", "approvals.read"), procurement.getOne);
 router.patch("/:id/procurement/checklist/:section", requireAnyPermission("procurement.update", "procurement.approve"), procurement.checklist); // { patch: { key: answer } } — section: boq | quote | po | receipt | jobCreation
-router.put("/:id/procurement/boq", procure, procurement.boq); // { lines: [{ key, siteQty?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }], add?, remove?, revise?, reason? }
+router.put("/:id/procurement/boq", procure, procurement.boq); // { lines: [{ key, siteQty?, inInventory?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }], add?, remove?, revise?, reason? }
 router.post("/:id/procurement/quotes", procure, procurement.addQuote); // { supplier, total, validUntil?, receivedAt?, note? }
 router.delete("/:id/procurement/quotes/:index", procure, procurement.removeQuote);
 router.post("/:id/procurement/purchase-orders", procure, procurement.createPurchaseOrder); // { supplier, lines, total?, deliveryEta? } → draft
 router.patch("/:id/procurement/purchase-orders/:poId", procure, procurement.updatePurchaseOrder); // { status?, supplier?, lines?, total?, deliveryEta?, scheduledFor?, deliveredAt?, receivedBy? }
 router.delete("/:id/procurement/purchase-orders/:poId", procure, procurement.deletePurchaseOrder); // drafts only
-router.post("/:id/procurement/approvals/:role/decision", requireAnyPermission("procurement.read", "leads.read", "estimation.read"), procurement.decideVariation); // { outcome: approved | rejected, note? } — role: SMM | BO
 
 // Job history: notes people add plus system events (assignments, notifications).
 router.get("/:id/history", readAny, getHistory);

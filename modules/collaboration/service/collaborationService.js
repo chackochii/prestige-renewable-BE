@@ -9,7 +9,10 @@
 //   respond  — the assignee, on an information request
 //   decide   — the requester, once a response is in — or, on a site visit,
 //              once its findings are in: approved, the job can be priced;
-//              sent back, operations goes again
+//              sent back, operations goes again. On an approval request it is
+//              the other way round: the assignee (the approver) decides —
+//              approved or rejected, with a note — and the procurement job's
+//              price-variation approval records it.
 //   progress — the assignee, on an assignment
 //   edit /
 //   cancel   — the requester, while it is still open
@@ -25,11 +28,21 @@ import { notify } from "../../notification/service/notificationService.js";
 import { addAttachment as fileOnOpportunity } from "../../opportunity/service/leadAttachmentService.js";
 import { recordSystemEvent } from "../../opportunity/service/leadWorkflowService.js";
 import {
+    assertVariationApprovalRequestable,
+    linkVariationApprovalRequest,
+    recordVariationDecision,
+    relinkVariationApprovalRequest,
+    unlinkVariationApprovalRequest,
+} from "../../opportunity/service/procurementService.js";
+import {
+    APPROVAL_DECISIONS,
+    APPROVAL_ROLE_BY_DEPARTMENT,
     ASSIGNMENT_DECISIONS,
     CLOSED_ASSIGNMENT_STATUSES,
     DEPARTMENTS,
     PRIORITIES,
     REQUEST_KINDS,
+    approverRoleFor,
     defaultPriorityFor,
     statusesFor,
 } from "../model/collaborationRequest.js";
@@ -48,7 +61,7 @@ const {
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
-const KIND_PREFIX = { information: "REQ", assignment: "ASG" };
+const KIND_PREFIX = { information: "REQ", assignment: "ASG", approval: "APR" };
 const OPEN_INFORMATION = ["pending", "clarification_required", "draft_saved", "responded", "under_review", "returned"];
 const RESPONDABLE = ["pending", "clarification_required", "returned", "draft_saved"];
 const DECIDABLE = ["responded", "under_review"];
@@ -62,7 +75,9 @@ export const isAdmin = (user) => Array.isArray(user?.roles) && user.roles.includ
 const isOpen = (request) =>
     request.kind === "assignment"
         ? !CLOSED_ASSIGNMENT_STATUSES.includes(request.status)
-        : OPEN_INFORMATION.includes(request.status);
+        : request.kind === "approval"
+          ? request.status === "pending"
+          : OPEN_INFORMATION.includes(request.status);
 
 /**
  * The visit has brought something back — the person attending submitted the
@@ -232,7 +247,7 @@ export const recordEvent = (request, action, detail, actor) =>
     });
 
 export const assertAssignable = async (userId, request) => {
-    const user = await User.findByPk(parseId(userId, "assigneeId"), { attributes: ["id", "name", "status"] });
+    const user = await User.findByPk(parseId(userId, "assigneeId"), { attributes: ["id", "name", "status", "roles"] });
     if (!user) throw httpError(400, "Unknown user for assigneeId");
     if (user.status !== "active") throw httpError(400, `${user.name} is not an active account`);
     const link = await UserBusinessUnit.findOne({
@@ -351,7 +366,17 @@ const parseDate = (value, field) => {
     return date;
 };
 
-/** Raised from a stage of one opportunity. */
+/**
+ * Raised from a stage of one opportunity.
+ *
+ * An approval request (kind "approval") is the procurement coordinator asking
+ * the sales manager (department sales) or the business owner (department
+ * admin) to approve the job's price variation. The procurement service says
+ * whether it may be raised — the variation has to need that role, nobody may
+ * have approved for it yet, no request to it may still be waiting, and the
+ * person asked must hold the role — and, once the row exists, links the job's
+ * approval to it and tells the approver.
+ */
 export const createRequest = async (user, opportunityId, payload = {}) => {
     const opportunity = await Opportunity.findByPk(parseId(opportunityId, "opportunity id"));
     if (!opportunity) throw httpError(404, "Opportunity not found");
@@ -360,10 +385,12 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
     if (!kind) throw httpError(400, `kind must be one of: ${REQUEST_KINDS.join(", ")}`);
     if (!DEPARTMENTS.includes(payload.department))
         throw httpError(400, `department must be one of: ${DEPARTMENTS.join(", ")}`);
+    if (kind === "approval" && !approverRoleFor(payload.department))
+        throw httpError(400, `An approval request goes to ${Object.keys(APPROVAL_ROLE_BY_DEPARTMENT).join(" or ")} — the department says which approver it is for`);
     const title = String(payload.title ?? "").trim();
     if (!title) throw httpError(400, "title is required");
     // Priority says whether the thing has to happen, not how urgent it is —
-    // one scale for both kinds.
+    // one scale for every kind.
     if (payload.priority && !PRIORITIES.includes(payload.priority))
         throw httpError(400, `priority must be one of: ${PRIORITIES.join(", ")}`);
 
@@ -377,9 +404,10 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
         description: payload.description ? String(payload.description).slice(0, 5000) : null,
         // An information request's items build the response form; a pre-site
         // inspection's are what the requester wrote in beyond the checklist,
-        // carried onto the site member's form by the coordinator.
-        requestedFields: kind === "information" ? cleanFields(payload.requestedFields) : cleanRequestedFields(payload.requestedFields),
-        requestedDocuments: cleanDocuments(payload.requestedDocuments),
+        // carried onto the site member's form by the coordinator. An approval
+        // asks for nothing but a decision.
+        requestedFields: kind === "information" ? cleanFields(payload.requestedFields) : kind === "assignment" ? cleanRequestedFields(payload.requestedFields) : [],
+        requestedDocuments: kind === "approval" ? [] : cleanDocuments(payload.requestedDocuments),
         createdById: user.id,
         priority: payload.priority || defaultPriorityFor(),
         // A pre-site inspection's required checklist items — the site
@@ -392,10 +420,14 @@ export const createRequest = async (user, opportunityId, payload = {}) => {
 
     const assignee = payload.assigneeId ? await assertAssignable(payload.assigneeId, draft) : null;
     draft.assigneeId = assignee?.id ?? null;
+    // Checked before the row exists, so a refused request leaves nothing behind.
+    const approverRole = kind === "approval" ? approverRoleFor(payload.department) : null;
+    const procurementJob = approverRole ? await assertVariationApprovalRequestable(opportunity, approverRole, assignee, user) : null;
     const request = await draft.save();
 
     await recordEvent(request, "Request raised", title, user);
-    if (assignee)
+    if (approverRole) await linkVariationApprovalRequest(opportunity, procurementJob, approverRole, request, assignee, user);
+    else if (assignee)
         await notify({
             event: "request.created",
             title: `${requestLabel(request)}: ${title}`,
@@ -432,16 +464,22 @@ export const updateRequest = async (user, id, payload = {}) => {
     if (payload.dueAt !== undefined) fields.dueAt = parseDate(payload.dueAt, "dueAt");
 
     let reassignedTo = null;
+    const approverRole = request.kind === "approval" ? approverRoleFor(request.department) : null;
     if (payload.assigneeId !== undefined && Number(payload.assigneeId) !== Number(request.assigneeId)) {
+        // An approval always has someone to decide it, and only a holder of the role.
+        if (approverRole && !payload.assigneeId) throw httpError(400, "An approval request needs someone to decide it (assigneeId)");
         reassignedTo = payload.assigneeId ? await assertAssignable(payload.assigneeId, request) : null;
+        if (approverRole && !(Array.isArray(reassignedTo.roles) && reassignedTo.roles.includes(approverRole)))
+            throw httpError(400, `${reassignedTo.name} does not hold the role this approval needs (${approverRole})`);
         fields.assigneeId = reassignedTo?.id ?? null;
     }
 
     await request.update(fields);
     await recordEvent(request, reassignedTo ? "Request reassigned" : "Request updated", reassignedTo?.name, user);
+    if (reassignedTo && approverRole) await relinkVariationApprovalRequest(request.opportunityId, approverRole, request, reassignedTo, user);
     if (reassignedTo)
         await notify({
-            event: "request.created",
+            event: approverRole ? "procurement.variation.approval_requested" : "request.created",
             title: `${requestLabel(request)}: ${request.title}`,
             body: `${user.name} passed this to you on ${request.opportunity?.number ?? "a record"}.`,
             userIds: [reassignedTo.id],
@@ -461,6 +499,8 @@ export const cancelRequest = async (user, id, payload = {}) => {
     const reason = String(payload.reason ?? "").trim();
     await request.update({ status: "cancelled", cancelledReason: reason || null });
     await recordEvent(request, "Request cancelled", reason, user);
+    // The job's approval goes back to "not requested", so the coordinator can send another.
+    if (request.kind === "approval") await unlinkVariationApprovalRequest(request.opportunityId, approverRoleFor(request.department), request, user);
     if (request.assigneeId)
         await notify({
             event: "request.cancelled",
@@ -513,7 +553,8 @@ export const submitResponse = async (user, id, payload = {}) => {
 };
 
 /**
- * The requester deciding on what came back.
+ * The requester deciding on what came back — or, on an approval request, the
+ * approver deciding.
  *
  *   information — body: { outcome: accepted | clarification_required | returned, note? }
  *   assignment  — body: { outcome: accepted | returned, note? }, once the
@@ -521,9 +562,13 @@ export const submitResponse = async (user, id, payload = {}) => {
  *                 closes the assignment and lets the job be priced; sending
  *                 them back reopens it — and the site-visit form, under the
  *                 same link — for operations to go again.
+ *   approval    — body: { outcome: approved | rejected, note? (required to
+ *                 reject) }, by the assignee. The decision is recorded on the
+ *                 procurement job's price-variation approval as well.
  */
 export const decideResponse = async (user, id, payload = {}) => {
     const request = assertReadable(await loadRequest(id), user);
+    if (request.kind === "approval") return decideApproval(user, request, payload);
     if (!isRequester(request, user)) throw httpError(403, "Only the person who raised this can decide on it");
     if (request.kind === "assignment") return decideFindings(user, request, payload);
     if (!DECIDABLE.includes(request.status)) throw httpError(400, "There is no response to decide on yet");
@@ -613,6 +658,35 @@ const decideFindings = async (user, request, payload = {}) => {
             request,
             actor: user,
         });
+
+    return reload(request, user);
+};
+
+/**
+ * The approver answering an approval request. Reached through decideResponse.
+ * Only the person asked decides; a rejection needs a note (the coordinator and
+ * the salesperson read it). The answer is kept on the request as its response
+ * — note, when, by whom — and recorded on the job's approval by the
+ * procurement service, which also tells the coordinator.
+ */
+const decideApproval = async (user, request, payload = {}) => {
+    if (!isAssignee(request, user)) throw httpError(403, `Only ${request.assignee?.name ?? "the person asked"} can approve or reject this`);
+    if (request.status !== "pending") throw httpError(400, `This approval request is already ${request.status}`);
+    if (!APPROVAL_DECISIONS.includes(payload.outcome)) throw httpError(400, `outcome must be one of: ${APPROVAL_DECISIONS.join(", ")}`);
+    const approved = payload.outcome === "approved";
+    const note = payload.note ? String(payload.note).trim().slice(0, 2000) : null;
+    if (!approved && !note) throw httpError(400, "Say why the variation is not approved (note)");
+
+    await request.update({
+        status: payload.outcome,
+        responseFields: {},
+        responseNote: note,
+        responseDraft: false,
+        responseSubmittedAt: new Date(),
+        responseSubmittedById: user.id,
+    });
+    await recordEvent(request, approved ? "Approved" : "Rejected", note, user);
+    await recordVariationDecision(request.opportunityId, approverRoleFor(request.department), { outcome: payload.outcome, note, request }, user);
 
     return reload(request, user);
 };
@@ -799,7 +873,7 @@ export const overdueRequests = async (since) =>
     CollaborationRequest.findAll({
         where: {
             dueAt: { [Op.lt]: new Date(), [Op.gt]: since },
-            status: { [Op.notIn]: ["accepted", "cancelled", "report_submitted"] },
+            status: { [Op.notIn]: ["accepted", "cancelled", "report_submitted", "approved", "rejected"] },
             assigneeId: { [Op.ne]: null },
         },
         include: [{ model: Opportunity, as: "opportunity", attributes: ["id", "number"] }],

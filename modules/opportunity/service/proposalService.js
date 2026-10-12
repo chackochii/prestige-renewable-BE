@@ -28,6 +28,7 @@ import { recordSystemEvent } from "./leadWorkflowService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { getOpportunity, listOpportunities, moveToNextStage, searchCondition } from "./opportunityService.js";
 import { REQUOTE_INCLUDE, presentRequote } from "./requoteService.js";
+import { exGstTotalOf } from "./quoteService.js";
 import { readableStages } from "./stageAccess.js";
 import { LIVE_STATUSES, OPEN_STATUSES } from "../model/proposal.js";
 import { newestFirst, pageOf, pagingOf } from "../../../utils/pagination.js";
@@ -279,6 +280,15 @@ const applyResponse = async (opportunity, proposal, { decision, name, note, chan
         ...(decision === "accepted" ? { acceptedAt: now } : {}),
         ...(decision === "rejected" ? { rejectionReason: note || null } : {}),
     });
+
+    // A yes fixes what the job is worth: the accepted version's total without
+    // GST (the pipeline, the Quotes totals, referrer commission and the
+    // billing split all count acceptedValue, and nothing used to write it).
+    if (decision === "accepted") {
+        const version = proposal.quoteVersionId ? await QuoteVersion.findByPk(proposal.quoteVersionId, { attributes: ["id", "grandTotal", "snapshot"] }) : null;
+        const accepted = exGstTotalOf(version ?? { grandTotal: proposal.grandTotal });
+        if (accepted !== null) await opportunity.update({ acceptedValue: accepted });
+    }
 
     const who = channel === "customer" ? `${name || "The customer"} (online)` : `${actor?.name || "Sales"}, on the customer's behalf${name ? ` (${name})` : ""}`;
     const said = note ? ` — "${note}"` : "";

@@ -1,7 +1,8 @@
 // Procurement & delivery (stage 6): the board, one job's record, the BOQ and
-// its rounds, supplier quotes, purchase orders, the price-variation approvals
-// and the coordinator's checklists. Permissions are on the routes; who may
-// approve a variation is decided in the service from the actor's roles.
+// its rounds, supplier quotes, purchase orders and the coordinator's
+// checklists. Permissions are on the routes. The price-variation approvals are
+// requested and decided through the collaboration module (requests of kind
+// "approval"), which records each decision on the job.
 
 import * as procurement from "../service/procurementService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
@@ -43,8 +44,4 @@ export const updatePurchaseOrder = asyncHandler(async (req, res) => {
 
 export const deletePurchaseOrder = asyncHandler(async (req, res) => {
     successResponse(res, { data: await procurement.deletePurchaseOrder(req.params.id, req.params.poId, req.user) });
-});
-
-export const decideVariation = asyncHandler(async (req, res) => {
-    successResponse(res, { data: await procurement.decideVariation(req.params.id, req.params.role, req.body, req.user) });
 });

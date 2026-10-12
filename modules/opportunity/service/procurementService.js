@@ -21,13 +21,28 @@
 // is applied to the record: the orders go out, the deliveries land, the Green
 // Deal job is created. The rules below mirror prestige-fe helpers/procurement.js
 // so the screen and the API agree on where a job is.
+//
+// A BOQ line: { key, kind: material | service, item, brand, unit, proposalQty,
+//   siteQty, inInventory, proposalUnitCost, quotedUnitCost | null, supplier,
+//   availability, leadTimeDays }. `inInventory` is set on the BOQ-vs-site tab
+//   (we already hold it, so no quote is sought — the FE's quote list leaves it
+//   out); the supplier, availability and price come on the supplier-quote tab.
+//
+// The price-variation approvals are not decided on the procurement screens.
+// The coordinator sends each approver a collaboration request of kind
+// "approval" (modules/collaboration — department sales for the sales manager,
+// admin for the business owner); the approver answers on the request, and the
+// collaboration service records the decision here (recordVariationDecision).
+// An approval entry: { role, approverId, approver, status: pending | approved |
+//   rejected, requestedAt, decidedAt, note, requestId } — requestId is the
+//   request it waits on or was decided by (null until one is sent).
 
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { multiLine, oneLine } from "../../../utils/text.js";
 import { notify } from "../../notification/service/notificationService.js";
-import { SUPER_ROLE_CODE, userHasPermission } from "../../role/service/roleService.js";
+import { userHasPermission } from "../../role/service/roleService.js";
 import { OPERATIONS_COORDINATOR_ROLE, recordSystemEvent } from "./leadWorkflowService.js";
 import { customerLabel } from "./opportunityPeople.js";
 import { searchCondition } from "./opportunityService.js";
@@ -67,9 +82,16 @@ const blank = (value) => value === undefined || value === null || String(value).
 const hasFiles = (value) => Array.isArray(value) && value.length > 0;
 const isNumber = (value) => !blank(value) && Number.isFinite(Number(value));
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
-const isSuper = (actor) => Array.isArray(actor?.roles) && actor.roles.includes(SUPER_ROLE_CODE);
 const money = (value) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD" }).format(Number(value) || 0);
-const signedPct = (pct) => `${pct > 0 ? "+" : ""}${Number(pct).toFixed(1)}%`;
+const signedPct = (pct) => (pct === null || pct === undefined ? "—" : `${pct > 0 ? "+" : ""}${Number(pct).toFixed(1)}%`);
+/** How an approval request reads to people (collaborationService.requestLabel, without importing it back). */
+const requestCode = (request) => `APR-${request?.id}`;
+const asFlag = (value, field) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "boolean") return value;
+    if (value === "true" || value === "false") return value === "true";
+    throw httpError(400, `${field} must be true or false`);
+};
 
 const nonNegative = (value, field) => {
     const n = Number(value);
@@ -93,6 +115,13 @@ const loadOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
     if (!opportunity) throw httpError(404, "Opportunity not found");
     return opportunity;
+};
+
+/** The job and its record as they are, with no stage check — or null when there is no record yet. */
+const findRow = async (id) => {
+    const opportunity = await loadOpportunity(id);
+    const row = await ProcurementJob.findOne({ where: { opportunityId: opportunity.id } });
+    return row ? { opportunity, row } : null;
 };
 
 // ---- The rules, mirrored from prestige-fe helpers/procurement.js -------------------
@@ -135,8 +164,10 @@ export const requiredApprovers = (row) => {
     return variationApproverRoles(pct);
 };
 
-const approvalFor = (row, role) => approvalsOf(row).find((entry) => entry.role === role) ?? null;
+export const approvalFor = (row, role) => approvalsOf(row).find((entry) => entry.role === role) ?? null;
 export const pendingApprovers = (row) => requiredApprovers(row).filter((role) => approvalFor(row, role)?.status !== "approved");
+/** The approvers the variation needs who have not approved yet. */
+export const approvalsComplete = (row) => pendingApprovers(row).length === 0;
 /** True once the job may place orders: every line quoted and no variation, or every approval in. */
 export const readyToOrder = (row) => quotesReceived(row) && pendingApprovers(row).length === 0;
 const roleName = (role) => APPROVER_ROLES[role] ?? role;
@@ -152,9 +183,11 @@ const SECTION_DONE = {
         ["quoteCurrentConfirmed", "supplierApproved", "quoteMatchesBoq", "quotesCompared", "pricingConfirmed", "stockConfirmed", "termsConfirmed"].every((key) => a[key] === true) &&
         hasFiles(a.quoteFile) && hasFiles(a.finalQuoteFile) && !blank(a.comparedSuppliers) && !blank(a.fulfilmentMethod) && !blank(a.fulfilmentDate) && !blank(a.fulfilmentTime) &&
         isNumber(a.freightCharges) && !blank(a.paymentDueDate),
+    // The variation approval is not a tick: it is done when every approver the
+    // variation needs has approved on their request (the FE's auto-answered row).
     po: (a, row) =>
         ["basisConfirmed", "poAmountMatches", "variationChecked", "supplierConfirmed", "deliveryConfirmed", "termsConfirmed", "releaseApproved", "poReleasedConfirmed"].every((key) => a[key] === true) &&
-        isNumber(a.poAmountValue) && hasFiles(a.poRecords) && (requiredApprovers(row).length === 0 || a.variationApproved === true),
+        isNumber(a.poAmountValue) && hasFiles(a.poRecords) && approvalsComplete(row),
     receipt: (a) =>
         ["matchesPo", "specsCorrect", "quantitiesMatch", "damageChecked", "allArrived", "materialsReady", "recordsUpdated"].every((key) => a[key] === true) &&
         hasFiles(a.receiptFiles) &&
@@ -189,6 +222,7 @@ const linesFromSnapshot = (snapshot) => {
             unit: oneLine(item?.unit, 30) || "ea",
             proposalQty: quantity,
             siteQty: quantity,
+            inInventory: false,
             proposalUnitCost: Number((unitPrice * (1 - discount / 100)).toFixed(2)),
             quotedUnitCost: null,
             supplier: null,
@@ -468,10 +502,14 @@ export const procurementBoard = async (query = {}, actor) => {
 // ---- Quotes in, variation out: the approvals -----------------------------------------
 
 /**
- * Every line is quoted: measure the variation and, when there is one, ask the
- * people who have to approve it — the sales manager under the threshold, the
- * owner as well from it. Called whenever the quoted costs change, so a re-quote
+ * Every line is priced: measure the variation and, when there is one, open an
+ * approval entry for each role that has to approve it — the sales manager under
+ * the threshold, the owner as well from it — and tell the coordinator to send
+ * them their requests. Called whenever the quoted costs change, so a re-quote
  * that crosses the threshold adds the owner without losing the manager's answer.
+ * Nobody is asked to decide here: that happens on the approval request the
+ * coordinator raises (collaborationService), which lands back in
+ * recordVariationDecision.
  */
 const syncApprovals = async (opportunity, row, actor, { announce = false } = {}) => {
     if (!quotesReceived(row)) return;
@@ -490,92 +528,177 @@ const syncApprovals = async (opportunity, row, actor, { announce = false } = {})
     const missing = required.filter((role) => !approvalFor(row, role));
     if (!missing.length) return;
     const now = new Date().toISOString();
-    const approvals = [...approvalsOf(row), ...missing.map((role) => ({ role, approverId: null, approver: null, status: "pending", requestedAt: now, decidedAt: null, note: null }))];
+    const approvals = [...approvalsOf(row), ...missing.map((role) => ({ role, approverId: null, approver: null, status: "pending", requestedAt: now, decidedAt: null, note: null, requestId: null }))];
     await row.update({ approvals });
     await recordSystemEvent(
         opportunity,
-        `Approvals requested — ${tier === "below" ? `below ${VARIATION_ESCALATION_PERCENT}%` : `${VARIATION_ESCALATION_PERCENT}% or more`}: ${missing.map(roleName).join(" and ")}`,
+        `Approvals needed — ${tier === "below" ? `below ${VARIATION_ESCALATION_PERCENT}%` : `${VARIATION_ESCALATION_PERCENT}% or more`}: ${missing.map(roleName).join(" and ")}. Send each an approval request from the Approvals tab`,
         actor
     );
-    for (const role of missing)
-        await notify({
-            event: "procurement.variation.approval_requested",
-            title: `${opportunity.number}: price variation of ${signedPct(pct)} needs your approval`,
-            body: `${customerLabel(opportunity)} — suppliers quoted ${money(quotedTotal(row))} against ${money(proposalTotal(row))} in the accepted proposal. Approve or decline it on the procurement page.`,
-            roleCode: role,
-            opportunity,
-            actor,
-            includeActor: true,
-        });
+    await notify({
+        event: "procurement.variation.approvals_needed",
+        title: `${opportunity.number}: price variation of ${signedPct(pct)} — approval${missing.length === 1 ? "" : "s"} to request`,
+        body: `${customerLabel(opportunity)} — suppliers quoted ${money(quotedTotal(row))} against ${money(proposalTotal(row))} in the accepted proposal. Send the ${missing.map((role) => roleName(role).toLowerCase()).join(" and the ")} an approval request from the Approvals tab; the purchase orders are held until it is approved.`,
+        roleCode: OPERATIONS_COORDINATOR_ROLE,
+        userIds: [opportunity.operationalCoordinatorId],
+        opportunity,
+        actor,
+        includeActor: true,
+    });
 };
 
-/** A daily nudge to whoever still has a variation to decide on — the chart's "frequent high-priority notifications". */
+/**
+ * A daily nudge while a variation is still unapproved — the chart's "frequent
+ * high-priority notifications": to the person asked when an approval request
+ * is waiting on them, and to the coordinator when one still has to be sent (or
+ * sent again, after a rejection).
+ */
 export const remindPendingApprovals = async () => {
-    const rows = await ProcurementJob.findAll({ include: [{ model: Opportunity, as: "opportunity", attributes: ["id", "number", "businessUnitId", "stage", "lifecycle", "customerLegalName", "customerTradingName"] }] });
+    const rows = await ProcurementJob.findAll({ include: [{ model: Opportunity, as: "opportunity", attributes: ["id", "number", "businessUnitId", "stage", "lifecycle", "customerLegalName", "customerTradingName", "operationalCoordinatorId"] }] });
     const today = new Date().toISOString().slice(0, 10);
     let raised = 0;
     for (const row of rows) {
         const opportunity = row.opportunity;
         if (!opportunity || opportunity.stage !== PROCUREMENT_STAGE || opportunity.lifecycle !== "Active") continue;
+        const pct = signedPct(variationPct(row));
         for (const role of pendingApprovers(row)) {
             const entry = approvalFor(row, role);
-            if (!entry || entry.status !== "pending") continue;
-            const days = Math.max(1, Math.round((Date.now() - new Date(entry.requestedAt).getTime()) / 86400000));
-            const { created } = await notify({
-                event: "procurement.variation.reminder",
-                title: `${opportunity.number}: price variation approval outstanding for ${days} day${days === 1 ? "" : "s"}`,
-                body: `${customerLabel(opportunity)} — the purchase orders are held until the ${roleName(role).toLowerCase()} approves the variation of ${signedPct(variationPct(row))}.`,
-                roleCode: role,
-                opportunity,
-                dedupeKey: `procurement-approval:${opportunity.id}:${role}:${today}`,
-            });
-            raised += created;
+            const who = roleName(role).toLowerCase();
+            if (entry?.status === "pending" && entry.requestId && entry.approverId) {
+                const days = Math.max(1, Math.round((Date.now() - new Date(entry.requestedAt).getTime()) / 86400000));
+                const { created } = await notify({
+                    event: "procurement.variation.reminder",
+                    title: `${opportunity.number}: price variation approval outstanding for ${days} day${days === 1 ? "" : "s"}`,
+                    body: `${customerLabel(opportunity)} — the purchase orders are held until you, as the ${who}, approve the variation of ${pct} on ${requestCode({ id: entry.requestId })}.`,
+                    userIds: [entry.approverId],
+                    opportunity,
+                    requestId: entry.requestId,
+                    dedupeKey: `procurement-approval:${opportunity.id}:${role}:${today}`,
+                });
+                raised += created;
+            } else {
+                const { created } = await notify({
+                    event: "procurement.variation.approvals_needed",
+                    title: `${opportunity.number}: the ${who}'s approval of the price variation is still to request`,
+                    body:
+                        entry?.status === "rejected"
+                            ? `${customerLabel(opportunity)} — the ${who} did not approve the variation of ${pct}${entry.note ? ` (${entry.note})` : ""}. Revise the quotes or send the request again from the Approvals tab; the purchase orders are held until it is approved.`
+                            : `${customerLabel(opportunity)} — the variation of ${pct} needs the ${who}'s approval. Send the request from the Approvals tab; the purchase orders are held until it is approved.`,
+                    roleCode: OPERATIONS_COORDINATOR_ROLE,
+                    userIds: [opportunity.operationalCoordinatorId],
+                    opportunity,
+                    dedupeKey: `procurement-approval-request:${opportunity.id}:${role}:${today}`,
+                });
+                raised += created;
+            }
         }
     }
     return raised;
 };
 
+// ---- The approval requests (raised and answered through modules/collaboration) ----
+
 /**
- * POST /:id/procurement/approvals/:role/decision — { outcome: approved | rejected, note? }
- * The sales manager or the business owner answering for the variation; ADM
- * may answer for either. Every required role must approve before orders go.
+ * Whether the coordinator may send `role` an approval request on this job —
+ * throws when not: the job has to be at the stage with every line priced, the
+ * variation has to need that role, the role must not have approved already or
+ * have a request still waiting, and the person asked must hold the role.
+ * Returns the job's record for linkVariationApprovalRequest once the request
+ * row exists.
  */
-export const decideVariation = async (id, role, payload = {}, actor) => {
+export const assertVariationApprovalRequestable = async (opportunity, role, assignee, actor) => {
+    const code = String(role ?? "").toUpperCase();
+    if (!APPROVER_ROLES[code]) throw httpError(400, "An approval request goes to the sales manager (sales) or the business owner (admin)");
+    if (!(await userHasPermission(actor, "procurement.update"))) throw httpError(403, "Only someone working the procurement stage (procurement.update) can request a price-variation approval");
+    if (opportunity.stage < PROCUREMENT_STAGE) throw httpError(400, "This job has not reached procurement & delivery yet");
+    const row = await ensureJob(opportunity, actor);
+    if (!quotesReceived(row)) throw httpError(400, "The variation is measured once every BOQ line is priced — nothing to approve yet");
+    if (!requiredApprovers(row).includes(code)) throw httpError(400, `This variation does not need the ${roleName(code).toLowerCase()}'s approval`);
+    const entry = approvalFor(row, code);
+    if (entry?.status === "approved") throw httpError(400, `The ${roleName(code).toLowerCase()} has already approved this variation`);
+    if (entry?.status === "pending" && entry.requestId) throw httpError(400, `An approval request to the ${roleName(code).toLowerCase()} is already waiting (${requestCode({ id: entry.requestId })})`);
+    if (!assignee) throw httpError(400, "Choose who the approval request goes to (assigneeId)");
+    if (!(Array.isArray(assignee.roles) && assignee.roles.includes(code))) throw httpError(400, `${assignee.name} does not hold the ${roleName(code).toLowerCase()} role`);
+    return row;
+};
+
+/** The request is saved: the job's approval for that role now waits on it, and the person asked is told. */
+export const linkVariationApprovalRequest = async (opportunity, row, role, request, assignee, actor) => {
+    const code = String(role).toUpperCase();
+    const now = new Date().toISOString();
+    const entry = { role: code, approverId: assignee.id, approver: assignee.name, status: "pending", requestedAt: now, decidedAt: null, note: null, requestId: request.id };
+    const approvals = approvalFor(row, code) ? approvalsOf(row).map((candidate) => (candidate.role === code ? entry : candidate)) : [...approvalsOf(row), entry];
+    await row.update({ approvals });
+    const pct = variationPct(row);
+    await recordSystemEvent(opportunity, `Approval requested — ${roleName(code).toLowerCase()} ${assignee.name} asked to approve the price variation of ${signedPct(pct)} (${requestCode(request)})`, actor);
+    await notify({
+        event: "procurement.variation.approval_requested",
+        title: `${opportunity.number}: price variation of ${signedPct(pct)} needs your approval`,
+        body: `${customerLabel(opportunity)} — suppliers quoted ${money(quotedTotal(row))} against ${money(proposalTotal(row))} in the accepted proposal. ${actor?.name ?? "The coordinator"} asks you, as the ${roleName(code).toLowerCase()}, to approve or reject it on ${requestCode(request)}; the purchase orders are held until it is approved.`,
+        userIds: [assignee.id],
+        opportunity,
+        request,
+        actor,
+    });
+};
+
+/** The request was handed to someone else: the job's approval names them now. */
+export const relinkVariationApprovalRequest = async (opportunityId, role, request, assignee, actor) => {
+    const found = await findRow(opportunityId);
+    if (!found) return;
+    const { opportunity, row } = found;
+    const code = String(role).toUpperCase();
+    const entry = approvalFor(row, code);
+    if (!entry || Number(entry.requestId) !== Number(request.id) || entry.status !== "pending") return;
+    await row.update({ approvals: approvalsOf(row).map((candidate) => (candidate.role === code ? { ...candidate, approverId: assignee.id, approver: assignee.name } : candidate)) });
+    await recordSystemEvent(opportunity, `Approval request ${requestCode(request)} passed to ${assignee.name} (${roleName(code).toLowerCase()})`, actor);
+};
+
+/** The request was cancelled while waiting: the approval is back to not requested. */
+export const unlinkVariationApprovalRequest = async (opportunityId, role, request, actor) => {
+    const found = await findRow(opportunityId);
+    if (!found) return;
+    const { opportunity, row } = found;
+    const code = String(role).toUpperCase();
+    const entry = approvalFor(row, code);
+    if (!entry || Number(entry.requestId) !== Number(request.id) || entry.status !== "pending") return;
+    await row.update({ approvals: approvalsOf(row).map((candidate) => (candidate.role === code ? { ...candidate, approverId: null, approver: null, requestId: null } : candidate)) });
+    await recordSystemEvent(opportunity, `Approval request ${requestCode(request)} to the ${roleName(code).toLowerCase()} cancelled — the variation still needs their approval`, actor);
+};
+
+/**
+ * The approver's answer on their request (collaborationService.decideApproval):
+ * recorded on the job's approval and in the history, and told to procurement
+ * and the coordinator — and the salesperson when it is a rejection. The last
+ * approval in releases the purchase orders.
+ */
+export const recordVariationDecision = async (opportunityId, role, { outcome, note = null, request = null } = {}, actor) => {
     const code = String(role ?? "").toUpperCase();
     if (!APPROVER_ROLES[code]) throw httpError(400, `role must be one of: ${Object.keys(APPROVER_ROLES).join(", ")}`);
-    const { opportunity, row } = await loadJob(id, actor);
-    if (!quotesReceived(row)) throw httpError(400, "The variation is measured once every line is quoted — nothing to decide yet");
-    if (!requiredApprovers(row).includes(code)) throw httpError(400, `This variation does not need the ${roleName(code).toLowerCase()}'s approval`);
-    if (!isSuper(actor) && !(Array.isArray(actor?.roles) && actor.roles.includes(code)))
-        throw httpError(403, `Only the ${roleName(code).toLowerCase()} can decide this approval`);
-    if (!["approved", "rejected"].includes(payload.outcome)) throw httpError(400, "outcome must be approved or rejected");
-    const note = multiLine(payload.note, 2000) || null;
-    if (payload.outcome === "rejected" && !note) throw httpError(400, "Say why the variation is not approved (note)");
-
+    if (!["approved", "rejected"].includes(outcome)) throw httpError(400, "outcome must be approved or rejected");
+    const { opportunity, row } = await loadJob(opportunityId, actor);
     const now = new Date().toISOString();
     const existing = approvalFor(row, code);
-    const entry = { role: code, approverId: actor.id, approver: actor.name, status: payload.outcome, requestedAt: existing?.requestedAt ?? now, decidedAt: now, note };
+    const entry = { role: code, approverId: actor.id, approver: actor.name, status: outcome, requestedAt: existing?.requestedAt ?? now, decidedAt: now, note: note || null, requestId: request?.id ?? existing?.requestId ?? null };
     const approvals = existing ? approvalsOf(row).map((candidate) => (candidate.role === code ? entry : candidate)) : [...approvalsOf(row), entry];
     await row.update({ approvals });
 
-    const pct = variationPct(row);
-    const approved = payload.outcome === "approved";
-    await recordSystemEvent(
-        opportunity,
-        `${roleName(code)} ${approved ? "approved" : "did not approve"} the price variation of ${signedPct(pct)}${note ? ` — ${note}` : ""}`,
-        actor
-    );
+    const pct = signedPct(variationPct(row));
+    const approved = outcome === "approved";
+    const code2 = request ? ` (${requestCode(request)})` : "";
+    await recordSystemEvent(opportunity, `${roleName(code)} ${approved ? "approved" : "did not approve"} the price variation of ${pct}${code2}${note ? ` — ${note}` : ""}`, actor);
     await notify({
         event: "procurement.variation.decided",
         title: `${opportunity.number}: variation ${approved ? "approved" : "not approved"} by the ${roleName(code).toLowerCase()}`,
-        body: `${customerLabel(opportunity)} — ${actor.name} ${approved ? "approved" : "declined"} the price variation of ${signedPct(pct)}${note ? `: ${note}` : "."}`,
+        body: `${customerLabel(opportunity)} — ${actor.name} ${approved ? "approved" : "declined"} the price variation of ${pct}${note ? `: ${note}` : "."}`,
         roleCode: PROCUREMENT_ROLE,
-        userIds: [opportunity.operationalCoordinatorId, ...(approved ? [] : [opportunity.salespersonId])],
+        userIds: [opportunity.operationalCoordinatorId, request?.createdById, ...(approved ? [] : [opportunity.salespersonId])].filter(Boolean),
         opportunity,
+        request,
         actor,
         priority: approved ? undefined : "high",
     });
-    if (approved && pendingApprovers(row).length === 0) {
+    if (approved && approvalsComplete(row)) {
         await recordSystemEvent(opportunity, "All approvals received — purchase orders can be released", actor);
         await notify({
             event: "procurement.approvals.complete",
@@ -596,11 +719,12 @@ export const decideVariation = async (id, role, payload = {}, actor) => {
 const cleanLineKey = (value) => oneLine(value, 60).replace(/[^A-Za-z0-9_-]+/g, "_");
 
 /**
- * PUT /:id/procurement/boq — the coordinator's verification of the BOQ against
- * the site: per line the quantity the site needs, the supplier, availability
- * and lead time, and the price quoted. body:
- *   { lines: [{ key, siteQty?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }],
- *     add?: [{ item, brand?, unit?, kind?, siteQty, quotedUnitCost?, supplier?, availability?, leadTimeDays? }],
+ * PUT /:id/procurement/boq — the coordinator's two passes over the BOQ: on the
+ * BOQ-vs-site tab the quantity the site needs and whether we already hold the
+ * item (inInventory); on the supplier-quote tab the supplier chosen, its
+ * availability and lead time, and the price on its quote. body:
+ *   { lines: [{ key, siteQty?, inInventory?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }],
+ *     add?: [{ item, brand?, unit?, kind?, siteQty, inInventory?, quotedUnitCost?, supplier?, availability?, leadTimeDays? }],
  *     remove?: [key], revise?: boolean, reason? }
  * `revise` closes the round: the lines as they stand go into the revisions and
  * the site figures become the new proposal quantities, matched again. The
@@ -615,6 +739,7 @@ export const updateBoq = async (id, payload = {}, actor) => {
     if (changes.length > MAX_LINES) throw httpError(400, `At most ${MAX_LINES} lines`);
     const applyFields = (line, change) => {
         if (change.siteQty !== undefined) line.siteQty = nonNegative(change.siteQty, "siteQty");
+        if (change.inInventory !== undefined) line.inInventory = asFlag(change.inInventory, "inInventory");
         if (change.quotedUnitCost !== undefined) line.quotedUnitCost = change.quotedUnitCost === null || change.quotedUnitCost === "" ? null : nonNegative(change.quotedUnitCost, "quotedUnitCost");
         if (change.supplier !== undefined) line.supplier = oneLine(change.supplier, 120) || null;
         if (change.availability !== undefined) {
@@ -650,6 +775,7 @@ export const updateBoq = async (id, payload = {}, actor) => {
                     unit: oneLine(entry.unit, 30) || "ea",
                     proposalQty: 0,
                     siteQty: 0,
+                    inInventory: false,
                     proposalUnitCost: 0,
                     quotedUnitCost: null,
                     supplier: null,
@@ -868,28 +994,15 @@ const cleanAnswer = (value) => {
 };
 
 /**
- * What the checklists settle, applied to the record: approval recorded on
- * CL-13 clears the variation, releasing on CL-13 sends the drafted orders,
- * everything arriving on CL-14 receives them, and CL-10 complete is the Green
- * Deal job. Each goes in the history; the ones other teams wait on notify.
+ * What the checklists settle, applied to the record: releasing on CL-13 sends
+ * the drafted orders, everything arriving on CL-14 receives them, and CL-10
+ * complete is the Green Deal job. Each goes in the history; the ones other
+ * teams wait on notify. The variation approval is not among them — only the
+ * approvers decide that, on their approval requests (recordVariationDecision).
  */
 const applyChecklistEffects = async (opportunity, row, section, before, after, actor) => {
     const turnedOn = (key) => after[key] === true && before[key] !== true;
     const name = actor?.name ?? "Operations";
-
-    if (section === "po" && turnedOn("variationApproved")) {
-        const now = new Date().toISOString();
-        const required = requiredApprovers(row);
-        const held = approvalsOf(row);
-        const note = `Recorded on CL-13 by ${name}${!blank(after.variationApprovedBy) ? `: ${String(after.variationApprovedBy).slice(0, 200)}` : ""}`;
-        const recordedBy = String(after.variationApprovedBy ?? "").slice(0, 120) || null;
-        const approvals = [
-            ...held.map((entry) => (required.includes(entry.role) && entry.status !== "approved" ? { ...entry, status: "approved", decidedAt: now, note, approver: entry.approver ?? recordedBy } : entry)),
-            ...required.filter((role) => !held.some((entry) => entry.role === role)).map((role) => ({ role, approverId: null, approver: recordedBy, status: "approved", requestedAt: now, decidedAt: now, note })),
-        ];
-        await row.update({ approvals });
-        if (required.length) await recordSystemEvent(opportunity, `Variation approval recorded on CL-13 — ${required.map(roleName).join(" and ")}${!blank(after.variationApprovedBy) ? `: ${after.variationApprovedBy}` : ""}`, actor);
-    }
 
     if (section === "po" && turnedOn("poReleasedConfirmed")) {
         const drafts = await PurchaseOrder.findAll({ where: { opportunityId: opportunity.id, status: "draft" } });
@@ -978,6 +1091,9 @@ export const updateChecklist = async (id, section, payload = {}, actor) => {
     const managerKeys = MANAGER_KEYS[section] ?? [];
     if (Object.keys(clean).some((key) => managerKeys.includes(key)) && !(await userHasPermission(actor, "procurement.approve")))
         throw httpError(403, "Only the Procurement Manager (procurement.approve) can sign that item");
+    // The variation approval cannot be ticked: each approver decides it on their own approval request.
+    if (section === "po" && Object.keys(clean).some((key) => ["variationApproved", "variationApprovedBy"].includes(key)))
+        throw httpError(400, "The variation approval is taken from the approval requests on the Approvals tab — it cannot be ticked on CL-13");
 
     const before = answersOf(row, section);
     const after = { ...before, ...clean };
@@ -996,8 +1112,7 @@ export const updateChecklist = async (id, section, payload = {}, actor) => {
 /** Why job creation (CL-10) cannot be completed yet, or null: the variation approval and the material receipt come first. */
 const jobCreationBlocker = (row) => {
     const waiting = [];
-    const po = answersOf(row, "po");
-    if (requiredApprovers(row).length && po.variationApproved !== true && pendingApprovers(row).length) waiting.push("the price-variation approval (PO release)");
+    if (!approvalsComplete(row)) waiting.push("the price-variation approval (PO release)");
     if (!SECTION_DONE.receipt(answersOf(row, "receipt"))) waiting.push("the material receipt");
     return waiting.length ? `Job creation opens once the price-variation approval and material receipt are complete — still waiting on ${waiting.join(" and ")}` : null;
 };

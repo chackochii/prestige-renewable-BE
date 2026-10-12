@@ -1,10 +1,29 @@
 // A request or assignment one team raises on another from a pipeline stage.
 //
-// The two kinds behave differently and the statuses below mirror
+// The three kinds behave differently and the statuses below mirror
 // prestige-fe/src/constants/collaboration.js — keep them in step.
+//
+//   information — "Sales, we need the client's bills." Answered on a form built
+//                 from the fields asked for; the requester accepts the answer.
+//   assignment  — "Operations, we need a site visit." Worked over time.
+//   approval    — "Sales manager, approve this price variation." Raised from
+//                 the procurement approvals tab to someone holding the approver
+//                 role; they approve or reject it with a note, and the decision
+//                 lands on the job's price-variation approval
+//                 (procurementService.recordVariationDecision).
 
-export const REQUEST_KINDS = ["information", "assignment"];
+export const REQUEST_KINDS = ["information", "assignment", "approval"];
 export const DEPARTMENTS = ["sales", "operations", "procurement", "finance", "admin"];
+
+/**
+ * An approval request's department says which approver it is for: the sales
+ * manager sits in sales, the business owner in admin. Only those two
+ * departments take approval requests, and the person asked must hold the role
+ * (prestige-fe constants/collaboration.js APPROVAL_DEPARTMENT_FOR_ROLE is the
+ * same map the other way round).
+ */
+export const APPROVAL_ROLE_BY_DEPARTMENT = { sales: "SMM", admin: "BO" };
+export const approverRoleFor = (department) => APPROVAL_ROLE_BY_DEPARTMENT[department] ?? null;
 
 /**
  * Who a department's requests go to: the role codes that make a person part
@@ -82,15 +101,26 @@ export const ASSIGNMENT_STATUSES = [
 /** The requester's decisions on an assignment — never set by the assignee. */
 export const ASSIGNMENT_DECISIONS = ["accepted", "returned"];
 
-export const statusesFor = (kind) => (kind === "assignment" ? ASSIGNMENT_STATUSES : INFORMATION_STATUSES);
+/** approval: pending → approved or rejected (by the person asked), or cancelled by the requester. */
+export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "cancelled"];
+
+/** The approver's answer on an approval request. */
+export const APPROVAL_DECISIONS = ["approved", "rejected"];
+
+export const statusesFor = (kind) =>
+    kind === "assignment" ? ASSIGNMENT_STATUSES : kind === "approval" ? APPROVAL_STATUSES : INFORMATION_STATUSES;
 
 /** An assignment nobody has to act on any more. */
 export const CLOSED_ASSIGNMENT_STATUSES = ["accepted", "cancelled"];
+
+/** An approval request that has been answered or withdrawn. */
+export const CLOSED_APPROVAL_STATUSES = ["approved", "rejected", "cancelled"];
 
 /** Statuses that still need somebody to act. */
 export const OPEN_STATUSES = [
     ...INFORMATION_STATUSES.filter((s) => !["accepted", "cancelled"].includes(s)),
     ...ASSIGNMENT_STATUSES.filter((s) => !CLOSED_ASSIGNMENT_STATUSES.includes(s)),
+    ...APPROVAL_STATUSES.filter((s) => !CLOSED_APPROVAL_STATUSES.includes(s)),
 ];
 
 export default (sequelize, DataTypes) => {

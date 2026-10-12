@@ -286,6 +286,24 @@ const presentVersion = (row) => ({
     createdByName: row.createdBy?.name ?? null,
 });
 
+/**
+ * A saved version's total without GST — the figure the pipeline counts (its
+ * screens show "ex GST"). Read off the version itself: under "exclusive" GST
+ * was added on top of the pre-tax total, under "inclusive" it is inside it,
+ * and either way the pre-tax figure is the total ÷ (1 + rate); "no_gst" has
+ * none. A version without its quote in the snapshot is taken as the default
+ * quote (GST exclusive at 10 %). Null when there is no total.
+ */
+export const exGstTotalOf = (version) => {
+    const total = Number(version?.grandTotal);
+    if (version?.grandTotal === null || version?.grandTotal === undefined || !Number.isFinite(total)) return null;
+    const quote = version?.snapshot?.quote ?? {};
+    if (quote.taxTreatment === "no_gst") return Math.round(total * 100) / 100;
+    const rate = Number(quote.gstRatePct ?? 10);
+    const exGst = Number.isFinite(rate) && rate > 0 ? total / (1 + rate / 100) : total;
+    return Math.round(exGst * 100) / 100;
+};
+
 /** Saved versions for this opportunity, newest first. */
 export const listVersions = async (id) => {
     const opportunityId = parseId(id, "opportunity id");
@@ -326,6 +344,12 @@ export const createVersion = async (id, payload = {}, actor) => {
             { transaction }
         );
     });
+
+    // The job is worth what it was last priced at, until a customer accepts a
+    // figure (proposalService sets acceptedValue then). Without this nothing
+    // wrote estimatedValue, and every pipeline value read $0.
+    const estimate = exGstTotalOf(created);
+    if (estimate !== null) await opportunity.update({ estimatedValue: estimate });
 
     const row = await QuoteVersion.findByPk(created.id, {
         include: [{ model: User, as: "createdBy", attributes: ["id", "name"] }],

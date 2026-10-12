@@ -51,7 +51,11 @@ export const NOTIFICATION_EVENTS = {
 
     // Procurement & delivery, stage 6 (modules/opportunity/service/procurementService).
     "procurement.started": { label: "Job entered procurement — BOQ to verify", priority: "high" },
-    "procurement.variation.approval_requested": { label: "Price variation needs your approval", priority: "high" },
+    // The quotes are in and the variation needs approving: the coordinator
+    // sends each approver a request (collaboration, kind "approval")...
+    "procurement.variation.approvals_needed": { label: "Price variation — approvals to request", priority: "high" },
+    // ...and the person asked hears about it, then daily until they answer.
+    "procurement.variation.approval_requested": { label: "Price variation approval request for you", priority: "high" },
     "procurement.variation.reminder": { label: "Price variation approval still outstanding", priority: "high" },
     "procurement.variation.decided": { label: "Price variation approved or declined", priority: "medium" },
     "procurement.approvals.complete": { label: "Variation approved — release the purchase orders", priority: "high" },
