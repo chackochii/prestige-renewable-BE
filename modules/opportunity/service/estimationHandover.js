@@ -1,8 +1,9 @@
-// Estimation → Proposal: the estimator sends a saved quote version on to
+// Estimation → Proposal: the estimator sends a generated quote version on to
 // sales. It is the stage-2 advance (same permission — estimation.update — and
-// the same gates: estimation ready, a priced quote, a saved version) with the
-// hand-over said properly: which version and total went, and a note to sales,
-// in the job's history and in the salesperson's notification.
+// the same gates: estimation ready, a priced quote, generated — locked to a
+// version) with the hand-over said properly: which version and total went,
+// and a note to sales, in the job's history and in the salesperson's
+// notification.
 //
 // When the job is back here for a re-quote (requoteService), the same step
 // returns the revised quote: the note says what changed — required, since
@@ -31,7 +32,7 @@ const money = (value) =>
 
 /**
  * { quoteVersionId?, note? } → the opportunity, now at the next stage.
- * Without quoteVersionId the newest saved version is the one handed over.
+ * Without quoteVersionId the newest generated version is the one handed over.
  * On a re-quote the note is what changed, and is required.
  */
 export const handOverToProposal = async (id, payload = {}, actor) => {
@@ -45,7 +46,7 @@ export const handOverToProposal = async (id, payload = {}, actor) => {
     if (!version)
         throw httpError(
             400,
-            payload.quoteVersionId ? "That quote version does not belong to this job" : "Save the quote as a version before sending it to proposal"
+            payload.quoteVersionId ? "That quote version does not belong to this job" : "Generate the quote before sending it to proposal"
         );
 
     const note = multiLine(payload.note, 2000);

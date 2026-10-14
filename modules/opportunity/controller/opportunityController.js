@@ -250,16 +250,24 @@ export const estimationChecklist = asyncHandler(async (req, res) => {
 
 // ---- Quote ------------------------------------------------------------------
 
-// ---- Saved quote versions ---------------------------------------------------
+// ---- Generated quote versions -----------------------------------------------
 
 export const getQuoteVersions = asyncHandler(async (req, res) => {
     successResponse(res, { data: await quotes.listVersions(req.params.id) });
 });
 
+/** Generates the quote: the next version, with the now-locked quote as `quote`. */
 export const createQuoteVersion = asyncHandler(async (req, res) => {
     const version = await quotes.createVersion(req.params.id, req.body, req.user);
 
     successResponse(res, { data: version }, 201);
+});
+
+/** Starts a new quote from the generated one — a draft again, pre-filled. */
+export const startQuoteDraft = asyncHandler(async (req, res) => {
+    const quote = await quotes.startDraft(req.params.id, req.user);
+
+    successResponse(res, { data: quote });
 });
 
 export const getQuote = asyncHandler(async (req, res) => {

@@ -369,6 +369,8 @@ const writeQuote = async (opportunity, customer, system, { at, saved }) => {
         createdById: ctx.estimator?.id ?? null,
     });
     await stamp(QuoteVersion, version.id, at);
+    // Generated: locked to v1, as the quote builder leaves it.
+    await Quote.update({ status: "generated", generatedAt: past(at), generatedVersionId: version.id }, { where: { id: quote.id }, silent: true });
     return { quote, version };
 };
 
@@ -871,7 +873,7 @@ const buildJob = async (job) => {
             const quotedAt = past(plusDays(estimationAt, Math.min(job.enteredAgo, 1) * 0.5 + 0.1));
             await writeQuote(opportunity, customer, system, { at: quotedAt, saved: job.scenario >= 0.85 });
             if (job.scenario >= 0.85) fields.estimatedValue = exGst;
-            if (job.scenario >= 0.85) await note(opportunity.id, `Quote ${opportunity.number.replace(/^([A-Z0-9]+)-/, "$1-Q-")} v1 saved — ${money(system.grandTotal)}`, quotedAt, ctx.people.estimator?.id);
+            if (job.scenario >= 0.85) await note(opportunity.id, `Quote ${opportunity.number.replace(/^([A-Z0-9]+)-/, "$1-Q-")} generated as version 1 (${money(system.grandTotal)}) — locked.`, quotedAt, ctx.people.estimator?.id);
             lastActivity = quotedAt;
         }
     }

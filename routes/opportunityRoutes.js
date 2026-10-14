@@ -34,6 +34,7 @@ import {
     getQuote,
     getQuoteVersions,
     createQuoteVersion,
+    startQuoteDraft,
     createQuote,
     updateQuote,
     addQuoteItem,
@@ -193,9 +194,12 @@ router.get("/:id/collaboration/requests", readAny, collaboration.getForOpportuni
 router.post("/:id/collaboration/requests", readAny, collaboration.create); // { kind, department, assigneeId, title, ... }
 
 // Quote builder — one quote per opportunity, nested items and costs, plus the
-// versions saved from it: each a frozen snapshot of the quote as issued.
+// versions generated from it: each a frozen snapshot of the quote as issued.
+// A quote is a draft (editable) until it is generated, then locked; a new
+// quote (POST /quote/draft) opens a pre-filled draft again.
 router.get("/:id/quote/versions", readAny, getQuoteVersions);
-router.post("/:id/quote/versions", estimate, createQuoteVersion); // { snapshot, quoteNumber?, grandTotal? } → the version
+router.post("/:id/quote/versions", estimate, createQuoteVersion); // { snapshot, quoteNumber?, grandTotal? } → the version (+ `quote`, now generated); 409 once generated
+router.post("/:id/quote/draft", estimate, startQuoteDraft); // → the quote, a draft again (409 unless generated)
 
 router.get("/:id/quote", readAny, getQuote); // → quote or null
 router.post("/:id/quote", estimate, createQuote); // → quote (idempotent)

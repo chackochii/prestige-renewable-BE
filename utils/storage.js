@@ -55,6 +55,7 @@ const storage = {
                 Key: checkKey(key),
                 Body: body,
                 ContentType: contentType,
+                ACL: "public-read",
                 // Streams need an explicit length; buffers carry their own.
                 ...(size !== undefined ? { ContentLength: size } : {}),
             }),

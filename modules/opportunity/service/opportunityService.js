@@ -8,7 +8,7 @@ import { parseId } from "../../../utils/ids.js";
 import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 import { isEstimationReady, preSiteInspectionBlocker } from "./estimationService.js";
 import { PROCUREMENT_STAGE, enterProcurement, procurementBlocker } from "./procurementService.js";
-import { quoteHasItems } from "./quoteService.js";
+import { quoteHasItems, quoteIsGenerated } from "./quoteService.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
@@ -579,10 +579,11 @@ export const advanceStage = async (id, actor, message = {}) => {
         if (inspection) throw httpError(400, inspection);
         if (!(await quoteHasItems(opportunity.id)))
             throw httpError(400, "Add at least one item to the quote before leaving estimation");
-        // The proposal stage sends a saved version to the customer, so one has
-        // to exist before the job gets there.
-        if (!(await db.QuoteVersion.count({ where: { opportunityId: opportunity.id } })))
-            throw httpError(400, "Save the quote as a version before sending it to proposal");
+        // The proposal stage sends a generated version to the customer, so the
+        // quote has to be generated — locked to a version, no draft open on it
+        // — before the job gets there.
+        if (!(await quoteIsGenerated(opportunity.id)))
+            throw httpError(400, "Generate the quote before sending it to proposal");
     }
 
     // Leaving the proposal stage needs the customer's yes — through their
