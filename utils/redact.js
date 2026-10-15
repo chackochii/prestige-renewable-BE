@@ -10,8 +10,9 @@
 const SENSITIVE_PARAMS = ["token", "access_token", "password", "secret", "key", "signature"];
 const QUERY_PATTERN = new RegExp(`([?&](?:${SENSITIVE_PARAMS.join("|")})=)[^&\\s]+`, "gi");
 
-// Path segments that are themselves the credential: /site-visits/<token>.
-const PATH_PATTERN = /(\/site-visits\/)[^/?#\s]+/gi;
+// Path segments that are themselves the credential: /site-visits/<token> and
+// the customer's /public/proposals/<token> link.
+const PATH_PATTERN = /(\/site-visits\/|\/public\/proposals\/)[^/?#\s]+/gi;
 
 /** The URL with any credential-bearing query value or path segment replaced. */
 export const redactUrl = (url) =>

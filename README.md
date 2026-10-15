@@ -45,7 +45,7 @@ DB_PASSWORD=postgres
 
 # Seed data (optional — defaults shown are used if omitted)
 SEED_SUPERADMIN_EMAIL=superadmin@prestige.au
-SEED_SUPERADMIN_PASSWORD=ChangeMe@123
+SEED_SUPERADMIN_PASSWORD=ChangeMe@xml
 
 # Public enquiry form (optional) — unit code used when the form sends none
 # PUBLIC_LEAD_UNIT_CODE=PRS
@@ -55,7 +55,7 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@123
 
 # Uploaded documents — DigitalOcean Spaces (required; the server won't start without them)
 DO_SPACES_ENDPOINT=https://syd1.digitaloceanspaces.com
-DO_SPACES_BUCKET=prestige-documents
+DO_SPACES_BUCKET=prestige-documents-a
 DO_SPACES_KEY=
 DO_SPACES_SECRET=
 # DO_SPACES_REGION=us-east-1
@@ -76,6 +76,8 @@ DO_SPACES_SECRET=
 | `SEED_SUPERADMIN_PASSWORD` | no | Password of the seeded superadmin, stored bcrypt-hashed (default `ChangeMe@123`) |
 | `PUBLIC_LEAD_UNIT_CODE` | no | Business unit the public enquiry form files into when the request has no `businessUnit`; otherwise the first unit by code |
 | `SLA_CHECK_INTERVAL_MINUTES` | no (default 1440 — once a day) | How often to look for records past their stage SLA and notify whoever is assigned; `0` turns the check off |
+| `LOG_TO_FILES` | no (default on) | `false` stops writing `logs/*.log` — use it when the platform collects stdout. Production always logs JSON to stdout |
+| `LOG_DIR`, `LOG_MAX_SIZE_MB`, `LOG_MAX_FILES`, `LOG_LEVEL` | no (`logs`, 10, 5, `info`) | Log folder, size at which a file rotates, how many rotated files are kept, minimum level. Never ship the log folder — it holds real request data |
 | `STREAM_TOKEN_EXPIRES_IN` | no (default 12h) | Lifetime of the token that opens the notification stream |
 | `DO_SPACES_ENDPOINT` | yes | The Space's region endpoint, e.g. `https://syd1.digitaloceanspaces.com` (not the bucket URL) |
 | `DO_SPACES_BUCKET` | yes | Name of the Space uploaded documents are stored in |

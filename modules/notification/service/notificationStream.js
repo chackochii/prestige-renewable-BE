@@ -88,3 +88,18 @@ export const streamStats = () => ({
     users: clients.size,
     connections: [...clients.values()].reduce((sum, set) => sum + set.size, 0),
 });
+
+/** Ends every open stream — shutdown only, so the server can finish closing. */
+export const closeAllStreams = () => {
+    clearInterval(heartbeat);
+    for (const connections of clients.values()) {
+        for (const res of connections) {
+            try {
+                res.end();
+            } catch {
+                // already gone
+            }
+        }
+    }
+    clients.clear();
+};
