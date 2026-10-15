@@ -21,6 +21,7 @@ const router = Router();
 // address can collect. Looser than the form because an office usually shares
 // one address. Set "trust proxy" if the API sits behind a reverse proxy.
 const loginLimiter = rateLimit({
+    name: "login",
     windowMs: 15 * 60 * 1000,
     max: 15,
     message: "Too many login attempts, try again in a few minutes.",

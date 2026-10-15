@@ -30,7 +30,7 @@ const bodySizeGuard = (req, res, next) => {
 router.post(
     "/leads",
     bodySizeGuard,
-    rateLimit({ windowMs: 15 * 60 * 1000, max: 10 }),
+    rateLimit({ name: "public-lead", windowMs: 15 * 60 * 1000, max: 10 }),
     createFromPublicForm
 ); // { name, email, phone, siteLine1?, siteSuburb?, siteState?, sitePostcode?, message?, businessUnit? } → { number, businessUnit }
 
@@ -42,9 +42,9 @@ router.post(
 // Writes are limited per token rather than per address — a crew on one site
 // shares a mobile gateway, while a leaked link is bounded on its own.
 const perToken = (req) => `site-visit:${req.params.token}`;
-const siteVisitRead = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
-const siteVisitUpload = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: perToken, message: "Too many uploads on this form — wait a few minutes." });
-const siteVisitSubmit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: perToken });
+const siteVisitRead = rateLimit({ name: "site-visit-read", windowMs: 15 * 60 * 1000, max: 300 });
+const siteVisitUpload = rateLimit({ name: "site-visit-upload", windowMs: 15 * 60 * 1000, max: 120, key: perToken, message: "Too many uploads on this form — wait a few minutes." });
+const siteVisitSubmit = rateLimit({ name: "site-visit-submit", windowMs: 15 * 60 * 1000, max: 10, key: perToken });
 
 router.get("/site-visits/:token", siteVisitRead, siteVisit.getTask); // → { status, title, siteAddress, requestedFields, requestedDocuments, photos, … }
 router.post("/site-visits/:token", siteVisitSubmit, siteVisit.submitTask); // { name, email?, phone?, fields } → the task, now submitted
@@ -60,8 +60,8 @@ router.get("/site-visits/:token/photos/:photoId", siteVisitRead, siteVisit.downl
 // one proposal, and only what the customer needs to read and answer it. Answers
 // are limited per token — a customer answers once; the limit only bounds
 // someone hammering a leaked link.
-const proposalRead = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
-const proposalRespond = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: (req) => `proposal:${req.params.token}` });
+const proposalRead = rateLimit({ name: "proposal-read", windowMs: 15 * 60 * 1000, max: 300 });
+const proposalRespond = rateLimit({ name: "proposal-respond", windowMs: 15 * 60 * 1000, max: 10, key: (req) => `proposal:${req.params.token}` });
 
 router.get("/proposals/:token", proposalRead, proposal.getPublic); // → { state, number, business, contact, grandTotal, quoteVersion: { snapshot }, response, … }
 router.post("/proposals/:token/respond", bodySizeGuard, proposalRespond, proposal.respondPublic); // { decision: accept|reject|renegotiate, name, note?, agree? } → the same, answered

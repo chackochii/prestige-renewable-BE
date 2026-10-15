@@ -2,7 +2,7 @@ import "dotenv/config";
 import app from "./app.js";
 import { connectDB, sequelize } from "./config/db.js";
 import { startSlaWatcher } from "./modules/notification/service/slaWatcher.js";
-import { closeAllStreams } from "./modules/notification/service/notificationStream.js";
+import { closeAllStreams, startStreamBus, stopStreamBus } from "./modules/notification/service/notificationStream.js";
 import logger from "./utils/logger.js";
 
 const PORT = process.env.PORT || 8000;
@@ -33,6 +33,7 @@ const shutdown = async (reason, exitCode = 0) => {
 
     try {
         stopSlaWatcher();
+        await stopStreamBus();
         if (server) {
             const closed = new Promise((resolve) => server.close(resolve));
             server.closeIdleConnections?.(); // keep-alive sockets with no request on them
@@ -73,6 +74,8 @@ const start = async () => {
         logger.error(`Server failed to listen on port ${PORT}: ${err.message}`);
         shutdown("listen error", 1);
     });
+    // Hears notifications raised by the other instances (see notificationStream.js).
+    startStreamBus();
     // Raises the "past SLA" notifications; see SLA_CHECK_INTERVAL_MINUTES.
     stopSlaWatcher = startSlaWatcher();
 };
