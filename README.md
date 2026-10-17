@@ -285,6 +285,15 @@ Only the approvals a job needs are tracked. **Which ones** is decided early: `op
 
 The approvals page's facts for the checklists come off the record and the accepted proposal's quote snapshot (`system`: panels × watts → kW, inverter, battery; `acceptedValue` = the accepted proposal's total). `council` is not captured on the lead and comes back null.
 
+**DNSP networks.** The networks offered on CL-07 item 1 ("Correct DNSP or network identified for the installation address") live in `dnsp_networks` (seeded by migration `20261017000001-dnsp-networks` with the 16 Australian networks) and are maintained by the system administrator. Jobs store the network's name in their checklist answers, so renaming, retiring or deleting a network never changes a job already recorded against it. See `modules/dnsp/service/dnspNetworkService.js`.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `GET` | `/api/dnsp-networks` | any signed-in user → `[{ id, name, state, isActive, sortOrder }]`, active and inactive, in dropdown order |
+| `POST` | `/api/dnsp-networks` | ADM only — `{ name, state?, isActive?, sortOrder? }` → the network; names are unique ignoring case (409); new networks go last unless `sortOrder` is given |
+| `PATCH` | `/api/dnsp-networks/:id` | ADM only — any of `{ name, state, isActive, sortOrder }` → the network |
+| `DELETE` | `/api/dnsp-networks/:id` | ADM only |
+
 ## Procurement & delivery (stage 6)
 
 One `procurement_jobs` row per job, created when it enters the stage (`moveToNextStage` → `enterProcurement`) with its bill of quantities seeded from the accepted quote version's items — each line `{ key, kind: material | service, item, brand, unit, proposalQty, siteQty, proposalUnitCost, quotedUnitCost, supplier, availability, leadTimeDays }`. The Operations Coordinator (`procurement.update`) verifies the BOQ against the site, records the supplier quotes and the prices against each line, drafts and sends the purchase orders (`purchase_orders`, now with `lines`, `sent_at`, `scheduled_for`, `received_by`; statuses `draft | sent | confirmed | scheduled | delivered`) and works the five checklists from the Sydpro process chart — CL-11 BOQ vs site, CL-12 supplier quote, CL-13 PO release, CL-14 material receipt, CL-10 job creation — whose answers are kept as JSON on the row. Items the Procurement Manager signs (`procurement.approve`) are refused to anyone else. See `modules/opportunity/service/procurementService.js`; prestige-fe `helpers/procurement.js` runs the same rules.
@@ -441,7 +450,11 @@ The estimator's workflow state lives on the opportunity (`estimation*` fields, r
 **Draft → generated → new quote.** A quote is a `draft` while the estimator builds it — every edit above saves as it is made. **Generating** it freezes it as the next version and **locks it**: nothing on a generated quote can be edited (the write endpoints answer 409), so what sales sends is exactly what the record holds. To change anything the estimator starts a **new quote** (`POST /quote/draft`): the same quote is a draft again with every line, cost and setting of the generated version as its starting point (the rows are not copied — the lock comes off), and generating it makes the next version. Generating a draft that is unchanged from the newest version (same `snapshot.quote`, keys sorted — the comparison the client makes in `helpers/invoice.js#matchesSnapshot`) locks the quote back onto that version instead of making a duplicate: that is how a new quote nothing was done with is cancelled. Both steps write a `system` history entry. Existing quotes with a version were migrated as `generated` (`20261012000001`).
 
 **Versions** are the quote as it stood when generated. The client sends the snapshot it rendered (`prestige-fe/src/helpers/invoice.js#invoiceSnapshot`) and the PDF is rebuilt from it on view, so nothing else needs storing. The **server owns the version number** — one past the highest this quote already has, unique per quote — so two people generating at the same moment cannot land on the same one; any `version` in the body is ignored. Generating needs at least one item. `estimatedValue` on the opportunity is set from each new version (ex GST).
-| `GET` | `/api/catalog` | any signed-in user → `[{ key, name, unit, brands: [{ name, unitPrice }] }]` (seeded by `npm run db:seed:catalog`, part of `npm run update`) |
+| `GET` | `/api/catalog` | any signed-in user → the active items `[{ key, name, unit, brands: [{ name, unitPrice }] }]` (a starter list is seeded into an empty catalog by `npm run db:seed:catalog`, part of `npm run update`) |
+| `GET` | `/api/catalog/manage` | ADM only → every item, active and inactive: `[{ id, key, name, unit, brands, isActive, sortOrder, isSystem }]` |
+| `POST` | `/api/catalog` | ADM only — `{ name, unit?, brands: [{ name, unitPrice }], isActive?, sortOrder? }` → the item; the key is made from the name (numbered if taken) and is permanent; at least one brand, brand names unique within the item |
+| `PATCH` | `/api/catalog/:id` | ADM only — any of `{ name, unit, brands, isActive, sortOrder }` → the item. Quote lines copy the name, brand and price, so saved quotes are unaffected |
+| `DELETE` | `/api/catalog/:id` | ADM only. `solar_panel`, `string_inverter`, `hybrid_inverter` and `battery` feed the approvals' system summary and are refused (409) — set them inactive instead |
 
 Quote totals and GST are derived by the client from items and costs; the API stores no totals. Every assignment, hold, confirmation and notification writes a `system` entry to the job history. `POST /:id/assign-coordinator` accepts `leads.update` **or** `estimation.update` because both screens use it.
 

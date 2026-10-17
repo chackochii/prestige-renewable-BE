@@ -1,8 +1,9 @@
 "use strict";
 
-// Starter product catalog for the quote builder (AUD ex GST). Idempotent:
-// only keys that do not exist yet are inserted, so it can run on every
-// deploy (`npm run update`) without touching prices someone has edited.
+// Starter product catalog for the quote builder (AUD ex GST). The catalog is
+// maintained by the system administrator (Superadmin → Quote catalog), so this
+// only fills an empty catalog: it can run on every deploy (`npm run update`)
+// without bringing back an item someone deleted or touching edited prices.
 
 const ITEMS = [
     // key, name, unit, brands [name, unitPrice]
@@ -22,10 +23,10 @@ const ITEMS = [
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
     async up(queryInterface) {
-        const [existing] = await queryInterface.sequelize.query('SELECT key FROM catalog_items');
-        const present = new Set(existing.map((row) => row.key));
+        const [[{ count }]] = await queryInterface.sequelize.query("SELECT COUNT(*)::int AS count FROM catalog_items");
+        if (count > 0) return;
         const now = new Date();
-        const rows = ITEMS.filter(([key]) => !present.has(key)).map(([key, name, unit, brands], index) => ({
+        const rows = ITEMS.map(([key, name, unit, brands], index) => ({
             key,
             name,
             unit,

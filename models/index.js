@@ -20,6 +20,7 @@ import defineQuoteItem from "../modules/opportunity/model/quoteItem.js";
 import defineQuoteCost from "../modules/opportunity/model/quoteCost.js";
 import defineQuoteVersion from "../modules/opportunity/model/quoteVersion.js";
 import defineCatalogItem from "../modules/catalog/model/catalogItem.js";
+import defineDnspNetwork from "../modules/dnsp/model/dnspNetwork.js";
 import defineEstimate from "../modules/opportunity/model/estimate.js";
 import defineEstimateOption from "../modules/opportunity/model/estimateOption.js";
 import defineProposal from "../modules/opportunity/model/proposal.js";
@@ -61,6 +62,7 @@ db.QuoteItem = defineQuoteItem(sequelize, DataTypes);
 db.QuoteCost = defineQuoteCost(sequelize, DataTypes);
 db.QuoteVersion = defineQuoteVersion(sequelize, DataTypes);
 db.CatalogItem = defineCatalogItem(sequelize, DataTypes);
+db.DnspNetwork = defineDnspNetwork(sequelize, DataTypes);
 
 // Lead ingestion (ad platforms & ServiceM8)
 db.IntegrationConnection = defineIntegrationConnection(sequelize, DataTypes);
@@ -115,6 +117,7 @@ export const {
     QuoteCost,
     QuoteVersion,
     CatalogItem,
+    DnspNetwork,
     IntegrationConnection,
     InboundLead,
     Estimate,
