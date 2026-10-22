@@ -989,7 +989,7 @@ const main = async () => {
     ctx.nextPo = (await PurchaseOrder.count()) + 1;
     catalog = Object.fromEntries((await CatalogItem.findAll({ where: { isActive: true } })).map((entry) => [entry.key, { name: entry.name, unit: entry.unit, brands: entry.brands }]));
     for (const key of ["solar_panel", "hybrid_inverter", "string_inverter", "battery", "mounting", "dc_cable", "install_labour", "design_engineering"])
-        if (!catalog[key]?.brands?.length) throw new Error(`The catalogue has no "${key}" item — run \`npm run db:seed:catalog\` first`);
+        if (!catalog[key]?.brands?.length) throw new Error(`The catalogue has no "${key}" item — add it under Superadmin → Quote catalog first`);
     if (!ctx.people.salespeople.length) console.log(`  (no salesperson in ${UNIT_CODE} — leads go unassigned)`);
 
     const jobs = plan();

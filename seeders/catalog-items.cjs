@@ -2,8 +2,8 @@
 
 // Starter product catalog for the quote builder (AUD ex GST). The catalog is
 // maintained by the system administrator (Superadmin → Quote catalog), so this
-// only fills an empty catalog: it can run on every deploy (`npm run update`)
-// without bringing back an item someone deleted or touching edited prices.
+// only fills an empty catalog: re-running it (`npm run db:seed`) never brings
+// back an item someone deleted or touches edited prices.
 
 const ITEMS = [
     // key, name, unit, brands [name, unitPrice]
