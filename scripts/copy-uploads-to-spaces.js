@@ -1,8 +1,8 @@
 // One-off move to DigitalOcean Spaces: copies document files that were stored
 // on local disk before the API switched to Spaces into the Space configured by
-// the DO_SPACES_* variables, under the same key. The documents table stores the
-// key, so no rows change. Safe to re-run: objects are overwritten with the same
-// bytes.
+// the DO_SPACES_* variables, under the same key, and records each file's
+// address in the Space on its row (storage_url). Safe to re-run: objects are
+// overwritten with the same bytes.
 //
 //   npm run storage:copy-to-spaces              (reads ./uploads)
 //   npm run storage:copy-to-spaces -- <folder>  (reads another folder)
@@ -17,7 +17,7 @@ const sourceDir = path.resolve(process.argv[2] || "uploads");
 
 const docs = await db.Document.findAll({
     where: { url: { [Op.ne]: null } },
-    attributes: ["id", "url", "mime"],
+    attributes: ["id", "url", "mime", "name"],
     order: [["id", "ASC"]],
 });
 
@@ -33,7 +33,8 @@ for (const doc of docs) {
             continue;
         }
         const { size } = fs.statSync(file);
-        await storage.put(doc.url, fs.createReadStream(file), { contentType: doc.mime || "application/octet-stream", size });
+        const storageUrl = await storage.put(doc.url, fs.createReadStream(file), { contentType: doc.mime || "application/octet-stream", size, filename: doc.name });
+        await doc.update({ storageUrl });
         copied += 1;
         console.log(`copied     #${doc.id} ${doc.url}`);
     } catch (err) {

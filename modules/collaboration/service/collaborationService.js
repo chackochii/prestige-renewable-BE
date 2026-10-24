@@ -19,13 +19,14 @@
 //
 // Every change writes a collaboration_events row (the history tab) and, where
 // somebody is waiting on it, raises a notification.
+import crypto from "node:crypto";
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import storage from "../../../utils/storage.js";
 import { signDownloadToken } from "../../../utils/jwt.js";
 import { notify } from "../../notification/service/notificationService.js";
-import { addAttachment as fileOnOpportunity } from "../../opportunity/service/leadAttachmentService.js";
+import { addAttachment as fileOnOpportunity, leadFolder } from "../../opportunity/service/leadAttachmentService.js";
 import { recordSystemEvent } from "../../opportunity/service/leadWorkflowService.js";
 import {
     assertVariationApprovalRequestable,
@@ -94,7 +95,13 @@ export const findingsDelivered = (request) => {
 
 // ---- Presentation -----------------------------------------------------------
 
+/**
+ * The link the screens open: the file's address in the Space, which does not
+ * expire. One stored without it falls back to the API's download route with a
+ * download-only token.
+ */
 const attachmentUrl = (attachment, actor) => {
+    if (attachment.storageUrl) return attachment.storageUrl;
     const base = String(process.env.BACKEND_URL || "").replace(/\/$/, "");
     const path = `/api/collaboration/requests/${attachment.requestId}/attachments/${attachment.id}/file`;
     const token = actor ? `?token=${signDownloadToken(actor, attachment.id, "collaboration")}` : "";
@@ -801,8 +808,9 @@ export const addRequestAttachment = async (user, id, category, file, documentKey
 
     const safe = String(file.originalname || "file").replace(/[^\w.\-]+/g, "_").slice(0, 80);
     const mime = file.mimetype && ALLOWED_MIME.test(file.mimetype) ? file.mimetype : "application/octet-stream";
-    const key = `collaboration/${request.id}/${Date.now()}-${safe}`;
-    await storage.put(key, file.buffer, { contentType: mime });
+    // In the lead's folder (SYD-26-0001/requests/…), beside the job's own files.
+    const key = `${leadFolder(request.opportunity ?? { id: request.opportunityId })}/requests/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safe}`;
+    const storageUrl = await storage.put(key, file.buffer, { contentType: mime, filename: file.originalname });
 
     const attachment = await CollaborationAttachment.create({
         requestId: request.id,
@@ -812,6 +820,7 @@ export const addRequestAttachment = async (user, id, category, file, documentKey
         mime,
         size: file.size,
         storageKey: key,
+        storageUrl,
         uploaderId: user.id,
     });
 
@@ -826,7 +835,7 @@ export const addRequestAttachment = async (user, id, category, file, documentKey
     };
 };
 
-/** Streams a request attachment back — the file itself never leaves via a link. */
+/** Streams a request attachment back through the API (the download route). */
 export const getAttachmentFile = async (user, id, attachmentId) => {
     const request = assertReadable(await loadRequest(id), user);
     const attachment = await CollaborationAttachment.findOne({

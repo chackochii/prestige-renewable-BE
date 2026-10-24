@@ -18,7 +18,7 @@ import storage from "../../../utils/storage.js";
 import { parseId } from "../../../utils/ids.js";
 import { unitDate } from "../../../utils/unitTime.js";
 import { notify } from "../../notification/service/notificationService.js";
-import { MIME_BY_EXTENSION, extensionOf } from "../../opportunity/service/leadAttachmentService.js";
+import { MIME_BY_EXTENSION, extensionOf, leadFolder } from "../../opportunity/service/leadAttachmentService.js";
 import { SITE_PHOTOS_KEY, fieldsToCheck } from "./inspectionForm.js";
 import {
     assertAssignable,
@@ -37,7 +37,7 @@ import {
     isWellFormedToken,
     newToken,
     presentPublicTask,
-    publicPhotoUrl,
+    photoUrl,
     sanitizeSubmission,
 } from "./siteVisitShape.js";
 
@@ -288,9 +288,10 @@ export const uploadPublicPhoto = async (token, file, documentKey) => {
     if (already >= MAX_PHOTOS_PER_VISIT) throw httpError(400, `This form already holds ${MAX_PHOTOS_PER_VISIT} files — that is the most it takes`);
 
     const safe = path.basename(String(file.originalname || "file")).replace(/[^\w.\-]+/g, "_").slice(0, 80) || "file";
-    const storageKey = `collaboration/${request.id}/site-visit/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safe}`;
+    // In the lead's folder (SYD-26-0001/site-visit/…), beside the job's own files.
+    const storageKey = `${leadFolder(request.opportunity ?? { id: request.opportunityId })}/site-visit/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safe}`;
     const mime = MIME_BY_EXTENSION[extension] || "application/octet-stream";
-    await storage.put(storageKey, file.buffer, { contentType: mime });
+    const storageUrl = await storage.put(storageKey, file.buffer, { contentType: mime, filename: file.originalname });
 
     const photo = await CollaborationAttachment.create({
         requestId: request.id,
@@ -300,10 +301,11 @@ export const uploadPublicPhoto = async (token, file, documentKey) => {
         mime,
         size: file.size,
         storageKey,
+        storageUrl,
         uploaderId: null,
     });
 
-    return { id: photo.id, filename: photo.filename, url: publicPhotoUrl(visit.token, photo.id), documentKey: photo.documentKey };
+    return { id: photo.id, filename: photo.filename, url: photoUrl(visit.token, photo), documentKey: photo.documentKey };
 };
 
 /** Streams one of this form's photos back to the page that uploaded it. */

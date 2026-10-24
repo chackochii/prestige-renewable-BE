@@ -5,7 +5,8 @@
 // no signed-in uploader.
 //
 // The file itself lives in the Space (utils/storage.js); storageKey is its
-// object key and never leaves the server.
+// object key and storageUrl its public address there — the link the screens
+// open.
 export const ATTACHMENT_CATEGORIES = ["attachment", "report", "site_visit"];
 
 export default (sequelize, DataTypes) => {
@@ -25,6 +26,7 @@ export default (sequelize, DataTypes) => {
             mime: { type: DataTypes.STRING(100) },
             size: { type: DataTypes.INTEGER },
             storageKey: { type: DataTypes.STRING(1000), allowNull: false },
+            storageUrl: { type: DataTypes.STRING(1000) },
             uploaderId: { type: DataTypes.INTEGER },
         },
         {

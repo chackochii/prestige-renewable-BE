@@ -19,7 +19,12 @@ export default (sequelize, DataTypes) => {
             version: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
             uploaderId: { type: DataTypes.INTEGER, allowNull: true },
             size: { type: DataTypes.STRING }, // display size or "generated"/"uploaded"
-            url: { type: DataTypes.STRING(1000) }, // where the file lives (drive link, object storage)
+            url: { type: DataTypes.STRING(1000) }, // the file's key in the Space (utils/storage.js), or a link kept elsewhere
+            // The file's public address in the Space — what the screens open (storage.publicUrl).
+            storageUrl: { type: DataTypes.STRING(1000) },
+            // The attachment category it was uploaded under (leadAttachmentService.ATTACHMENT_CATEGORIES);
+            // null for a document uploaded by type alone.
+            category: { type: DataTypes.STRING(30) },
             label: { type: DataTypes.STRING(50) }, // what it is attached to, e.g. "approval_12", "7c"
             stage: { type: DataTypes.INTEGER }, // pipeline stage it was captured in
             mime: { type: DataTypes.STRING(100) },

@@ -51,11 +51,12 @@ import { searchCondition } from "./opportunityService.js";
 import { readableStages } from "./stageAccess.js";
 import { VARIATION_ESCALATION_PERCENT, variationApproverRoles } from "./approvalPolicy.js";
 import { acceptedProposalsFor, siteOf } from "./approvalsService.js";
+import { presentDocument } from "./leadAttachmentService.js";
 import { PURCHASE_ORDER_STATUSES } from "../model/purchaseOrder.js";
 import { newestFirst, pageOf, pagingOf } from "../../../utils/pagination.js";
 import { unitYear2 } from "../../../utils/unitTime.js";
 
-const { Opportunity, BusinessUnit, ProcurementJob, PurchaseOrder, User, OpportunityHistory, Notification } = db;
+const { Opportunity, BusinessUnit, ProcurementJob, PurchaseOrder, User, OpportunityHistory, Notification, Document } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -342,7 +343,7 @@ const historyAndNoticesFor = async (opportunityIds) => {
  * approvals, purchase orders, the Green Deal job, the checklist answers, and
  * the history and notices behind it.
  */
-const presentJob = (opportunity, row, { purchaseOrders = [], people = new Map(), accepted = null, history = [], notifications = [] }) => {
+const presentJob = (opportunity, row, { purchaseOrders = [], people = new Map(), accepted = null, history = [], notifications = [], fileLinks = new Map() }) => {
     const pct = variationPct(row);
     const greenDeal = isPlainObject(row.greenDeal) && row.greenDeal.created ? row.greenDeal : { created: false };
     return {
@@ -365,7 +366,7 @@ const presentJob = (opportunity, row, { purchaseOrders = [], people = new Map(),
         approvals: approvalsOf(row),
         purchaseOrders: purchaseOrders.map(presentPurchaseOrder),
         greenDeal,
-        checklist: checklistOf(row),
+        checklist: withFileLinks(checklistOf(row), fileLinks),
         // The API's own reading of the rules, so a client need not recompute them.
         variation: {
             proposalTotal: proposalTotal(row),
@@ -388,15 +389,39 @@ const peopleFor = async (opportunities) => {
     return new Map(users.map((user) => [user.id, user]));
 };
 
+/** { documentId → the address the screens open } for the documents of these jobs. */
+const fileLinksFor = async (opportunityIds) => {
+    const docs = await Document.findAll({ where: { opportunityId: { [Op.in]: opportunityIds } }, attributes: ["id", "opportunityId", "url", "storageUrl"] });
+    return new Map(docs.map((doc) => [doc.id, presentDocument(doc).url]).filter(([, url]) => url));
+};
+
+/**
+ * The checklist answers with every attached file's link read from its
+ * document row. The answers keep { id, filename, url } as they were saved;
+ * links saved before files kept their address in the Space carried a token
+ * that ran out after two hours, so the stored url is not trusted.
+ */
+const withFileLinks = (checklist, links) => {
+    if (!links.size) return checklist;
+    const relink = (value) =>
+        Array.isArray(value)
+            ? value.map((file) => (isPlainObject(file) && links.has(Number(file.id)) ? { ...file, url: links.get(Number(file.id)) } : file))
+            : isPlainObject(value)
+              ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, relink(inner)]))
+              : value;
+    return relink(checklist);
+};
+
 const purchaseOrdersFor = (opportunityIds) =>
     PurchaseOrder.findAll({ where: { opportunityId: { [Op.in]: opportunityIds } }, order: [["id", "ASC"]] });
 
 const presentOne = async (opportunity, row) => {
-    const [pos, people, accepted, { history, notifications }] = await Promise.all([
+    const [pos, people, accepted, { history, notifications }, fileLinks] = await Promise.all([
         purchaseOrdersFor([opportunity.id]),
         peopleFor([opportunity]),
         acceptedProposalsFor([opportunity.id]),
         historyAndNoticesFor([opportunity.id]),
+        fileLinksFor([opportunity.id]),
     ]);
     return presentJob(opportunity, row, {
         purchaseOrders: pos,
@@ -404,6 +429,7 @@ const presentOne = async (opportunity, row) => {
         accepted: accepted.get(opportunity.id) ?? null,
         history: history.get(opportunity.id) ?? [],
         notifications: notifications.get(opportunity.id) ?? [],
+        fileLinks,
     });
 };
 
@@ -485,7 +511,12 @@ export const procurementBoard = async (query = {}, actor) => {
     const onPage = pageOf(listed, paging);
     if (!onPage.length) return empty(listed.length);
     const pageIds = onPage.map((o) => o.id);
-    const [people, accepted, { history, notifications }] = await Promise.all([peopleFor(onPage), acceptedProposalsFor(pageIds), historyAndNoticesFor(pageIds)]);
+    const [people, accepted, { history, notifications }, fileLinks] = await Promise.all([
+        peopleFor(onPage),
+        acceptedProposalsFor(pageIds),
+        historyAndNoticesFor(pageIds),
+        fileLinksFor(pageIds),
+    ]);
     return {
         rows: onPage.map((opportunity) =>
             presentJob(opportunity, rows.get(opportunity.id), {
@@ -494,6 +525,7 @@ export const procurementBoard = async (query = {}, actor) => {
                 accepted: accepted.get(opportunity.id) ?? null,
                 history: history.get(opportunity.id) ?? [],
                 notifications: notifications.get(opportunity.id) ?? [],
+                fileLinks,
             })
         ),
         total: listed.length,

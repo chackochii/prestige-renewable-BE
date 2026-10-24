@@ -220,6 +220,9 @@ const base = () => String(process.env.BACKEND_URL || "").replace(/\/$/, "");
 /** A photo's address on the public side, opened with the link's token. */
 export const publicPhotoUrl = (token, photoId) => `${base()}/api/public/site-visits/${encodeURIComponent(token)}/photos/${photoId}`;
 
+/** What the public form opens for a photo: its address in the Space, or the public route for one stored without it. */
+export const photoUrl = (token, photo) => photo.storageUrl || publicPhotoUrl(token, photo.id);
+
 const asList = (value) => (Array.isArray(value) ? value : []);
 
 /**
@@ -290,7 +293,7 @@ export const presentPublicTask = (visit, request, opportunity, photos = [], { qu
     photos: photos.map((photo) => ({
         id: photo.id,
         filename: photo.filename,
-        url: publicPhotoUrl(visit.token, photo.id),
+        url: photoUrl(visit.token, photo),
         documentKey: photo.documentKey,
     })),
 });

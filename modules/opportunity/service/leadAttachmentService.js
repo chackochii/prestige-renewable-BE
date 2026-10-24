@@ -5,7 +5,8 @@
 // Two views of the same documents exist: the generic document API (type,
 // stage, label — used by later pipeline stages) and the lead screens'
 // "attachments" (photo | sketch | bill | document categories, each with a
-// URL the browser can open directly).
+// URL the browser can open directly). That URL is the file's address in the
+// Space, kept on the row as storageUrl when it is stored.
 import crypto from "node:crypto";
 import path from "node:path";
 import db from "../../../models/index.js";
@@ -58,7 +59,17 @@ export const ATTACHMENT_CATEGORIES = {
     purchase_order: "other",
     delivery_receipt: "evidence",
 };
-const CATEGORY_BY_TYPE = Object.fromEntries(Object.entries(ATTACHMENT_CATEGORIES).map(([c, t]) => [t, c]));
+// A document without a recorded category reads as the one its type was most
+// often uploaded under — "evidence" is a client document unless the row says
+// it is a delivery receipt; "other" stays other.
+const CATEGORY_BY_TYPE = {
+    site_photo: "photo",
+    drawing: "sketch",
+    energy_bill: "bill",
+    lead: "document",
+    evidence: "client_document",
+    supplier_quote: "supplier_quote",
+};
 
 const formatSize = (bytes) => {
     const n = Number(bytes) || 0;
@@ -73,6 +84,16 @@ const safeFileName = (name) => {
 };
 
 export const extensionOf = (name) => path.extname(String(name || "")).slice(1).toLowerCase();
+
+/**
+ * The lead's folder in the Space: its number, e.g. "SYD-26-0001", so every file
+ * and photo of one job sits together. Request files and site-visit photos go
+ * in subfolders of it (requests/, site-visit/). Numbers are never reused — a
+ * deleted record keeps its own — so a folder only ever holds one job's files.
+ * Files stored before this keep their old keys (opportunities/<id>/…).
+ */
+export const leadFolder = (opportunity) =>
+    String(opportunity?.number || "").trim().replace(/[^A-Za-z0-9_-]+/g, "_") || `opportunity-${opportunity?.id}`;
 
 const loadOpportunity = async (id) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
@@ -132,18 +153,24 @@ export const removeMeeting = async (id, meetingId) => {
 
 const documentInclude = () => [{ model: User, as: "uploader", attributes: ["id", "name"] }];
 
-/** Public shape of a document row: plain object plus the download path. */
+/**
+ * Public shape of a document row: plain object, its address in the Space as
+ * `url` (null when it was recorded without one), and the API's download path.
+ */
 export const presentDocument = (doc) => {
-    const plain = typeof doc.get === "function" ? doc.get({ plain: true }) : { ...doc };
-    delete plain.url; // storage path — never leaves the server
+    const { url: key, storageUrl, ...plain } = typeof doc.get === "function" ? doc.get({ plain: true }) : { ...doc };
+    // The key is the server's; a row recorded as a link elsewhere is its own address.
+    plain.url = storageUrl || (/^https?:\/\//.test(String(key || "")) ? key : null);
     plain.fileUrl = `/api/opportunities/${plain.opportunityId}/documents/${plain.id}/file`;
     return plain;
 };
 
 /**
  * Attachment shape for the lead screens: a category and a URL the browser can
- * open directly. The URL carries a download-only token (2 h) minted for the
- * requesting user, so the session token never appears in a link.
+ * open directly — the file's address in the Space, which does not expire. A
+ * row stored without one falls back to the API's download route with a
+ * download-only token (2 h) minted for the requesting user, so the session
+ * token never appears in a link.
  */
 export const presentAttachment = (doc, actor) => {
     const plain = presentDocument(doc);
@@ -152,7 +179,7 @@ export const presentAttachment = (doc, actor) => {
     return {
         id: plain.id,
         opportunityId: plain.opportunityId,
-        category: CATEGORY_BY_TYPE[plain.type] || "other",
+        category: plain.category || CATEGORY_BY_TYPE[plain.type] || "other",
         type: plain.type,
         filename: plain.name,
         size: plain.size,
@@ -160,7 +187,7 @@ export const presentAttachment = (doc, actor) => {
         stage: plain.stage,
         uploaderName: plain.uploader?.name ?? null,
         createdAt: plain.createdAt,
-        url: `${base}${plain.fileUrl}${token}`,
+        url: plain.url || `${base}${plain.fileUrl}${token}`,
     };
 };
 
@@ -177,9 +204,9 @@ export const listAttachments = async (id, actor) => {
     return (await findDocuments(opportunity.id)).map((doc) => presentAttachment(doc, actor));
 };
 
-// Writes the files to storage and records one document row each. Returns the
-// rows (with uploader) in the order given.
-const storeFiles = async (opportunity, files, { type, stage, label }, actor) => {
+// Writes the files to storage and records one document row each — its key and
+// its address in the Space. Returns the rows (with uploader) in the order given.
+const storeFiles = async (opportunity, files, { type, stage, label, category = null }, actor) => {
     if (!files.length) throw httpError(400, "Attach at least one file");
     for (const file of files) {
         if (!ALLOWED_EXTENSIONS.has(extensionOf(file.originalname)))
@@ -188,16 +215,18 @@ const storeFiles = async (opportunity, files, { type, stage, label }, actor) => 
 
     const created = [];
     for (const file of files) {
-        const key = `opportunities/${opportunity.id}/${safeFileName(file.originalname)}`;
+        const key = `${leadFolder(opportunity)}/${safeFileName(file.originalname)}`;
         const mime = MIME_BY_EXTENSION[extensionOf(file.originalname)] || "application/octet-stream";
-        await storage.put(key, file.buffer, { contentType: mime });
+        const storageUrl = await storage.put(key, file.buffer, { contentType: mime, filename: file.originalname });
         const doc = await Document.create({
             opportunityId: opportunity.id,
             type,
+            category,
             name: String(file.originalname).slice(0, 255),
             uploaderId: actor?.id ?? null,
             size: formatSize(file.size),
             url: key,
+            storageUrl,
             label,
             stage,
             mime,
@@ -231,13 +260,17 @@ export const addDocuments = async (id, files = [], meta = {}, actor) => {
     return docs.map(presentDocument);
 };
 
-/** One file for the lead screens, keyed by category (photo | sketch | bill | document). */
+/**
+ * One file for the lead screens, keyed by category (photo | sketch | bill |
+ * document | …). The category is kept on the row, and the stage is the one the
+ * job was at when the file came in.
+ */
 export const addAttachment = async (id, file, category, actor) => {
     const opportunity = await loadOpportunity(id);
     const type = ATTACHMENT_CATEGORIES[category];
     if (!type) throw httpError(400, `category must be one of: ${Object.keys(ATTACHMENT_CATEGORIES).join(", ")}`);
     if (!file) throw httpError(400, 'Attach a file in the "file" field');
-    const [doc] = await storeFiles(opportunity, [file], { type, stage: 1, label: null }, actor);
+    const [doc] = await storeFiles(opportunity, [file], { type, category, stage: Number(opportunity.stage) || 1, label: null }, actor);
     return presentAttachment(doc, actor);
 };
 

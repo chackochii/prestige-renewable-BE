@@ -18,6 +18,10 @@ const MAX_FIELD_BYTES = 2 * 1024;
 
 const parser = multer({
     storage: multer.memoryStorage(),
+    // Browsers send the file name as UTF-8. Busboy's default (latin1) turned
+    // "Bill – Oct.pdf", or the narrow space in a macOS screenshot's name, into
+    // mojibake — in the stored name and the name the file downloads as.
+    defParamCharset: "utf8",
     limits: {
         fileSize: MAX_FILE_BYTES,
         files: MAX_FILES,
