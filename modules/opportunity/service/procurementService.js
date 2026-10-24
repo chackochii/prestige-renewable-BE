@@ -20,7 +20,9 @@
 // CL-10 job creation); their answers live here as JSON, and what they settle
 // is applied to the record: the orders go out, the deliveries land, the Green
 // Deal job is created. The rules below mirror prestige-fe helpers/procurement.js
-// so the screen and the API agree on where a job is.
+// so the screen and the API agree on where a job is. Since UAT (Oct 2026) the
+// stage itself ends at the PO release: CL-14 and CL-10 are worked from
+// construction (stage 7) on the same record — see the stage gates at the end.
 //
 // A BOQ line: { key, kind: material | service, item, brand, unit, proposalQty,
 //   siteQty, inInventory, proposalUnitCost, quotedUnitCost | null, supplier,
@@ -58,6 +60,8 @@ const { Opportunity, BusinessUnit, ProcurementJob, PurchaseOrder, User, Opportun
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 export const PROCUREMENT_STAGE = 6;
+// Construction works the material receipt and the Green Deal job on this record.
+export const CONSTRUCTION_STAGE = 7;
 export const CHECKLIST_SECTIONS = ["boq", "quote", "po", "receipt", "jobCreation"];
 const SECTION_CODES = { boq: "CL-11 BOQ vs site requirement", quote: "CL-12 supplier quote", po: "CL-13 purchase order release", receipt: "CL-14 material receipt", jobCreation: "CL-10 job creation" };
 const AVAILABILITY = ["available", "lead_time", "backorder"];
@@ -1117,17 +1121,25 @@ const jobCreationBlocker = (row) => {
     return waiting.length ? `Job creation opens once the price-variation approval and material receipt are complete — still waiting on ${waiting.join(" and ")}` : null;
 };
 
-// ---- The stage gate -----------------------------------------------------------------------
+// ---- The stage gates ----------------------------------------------------------------------
+// Procurement ends at the purchase order release (CL-13). The material receipt
+// (CL-14) and the Green Deal job (CL-10) are worked while the job is in
+// construction, on the same record, and let it leave construction — mirrors
+// prestige-fe helpers/stageTransition.js procurementGateItems.
 
-/**
- * Why the job cannot leave procurement, or null: the materials have to be
- * confirmed ready (CL-14) and the Green Deal job created (CL-10) — the
- * module's exit on the chart.
- */
+/** Why the job cannot leave procurement, or null: every item on PO release (CL-13) done. */
 export const procurementBlocker = async (opportunity) => {
     const row = await ProcurementJob.findOne({ where: { opportunityId: opportunity.id } });
     if (!row) return "Work the procurement checklists before leaving procurement & delivery";
-    if (answersOf(row, "receipt").materialsReady !== true) return "Confirm the materials are ready for installation (material receipt, CL-14) before leaving procurement";
-    if (!SECTION_DONE.jobCreation(answersOf(row, "jobCreation"))) return "Create the job in Green Deal and confirm it matches the signed quote (CL-10) before leaving procurement";
+    if (!sectionComplete(row, "po")) return "Complete every item on PO release (CL-13) before leaving procurement";
+    return null;
+};
+
+/** Why the job cannot leave construction, or null: the materials confirmed ready (CL-14) and the Green Deal job created (CL-10). */
+export const constructionBlocker = async (opportunity) => {
+    const row = await ProcurementJob.findOne({ where: { opportunityId: opportunity.id } });
+    if (!row) return "Receive the materials and create the job in Green Deal before leaving construction";
+    if (answersOf(row, "receipt").materialsReady !== true) return "Confirm the materials are ready for installation (material receipt, CL-14) before leaving construction";
+    if (!SECTION_DONE.jobCreation(answersOf(row, "jobCreation"))) return "Create the job in Green Deal and confirm it matches the signed quote (CL-10) before leaving construction";
     return null;
 };

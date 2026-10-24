@@ -1,6 +1,10 @@
 // An additional cost on a quote (transport, installation, civil work, …):
-// either a fixed amount or a percentage of the items subtotal.
+// either a fixed amount or a percentage of the items subtotal. `kind` is the
+// quote builder's section — a cost adds to the quote, a rebate or a discount
+// takes money off it (prestige-fe constants/catalog.js COST_KINDS). A line
+// starts with no cost type until the estimator picks one.
 export const COST_CALC_TYPES = ["fixed", "percentage"];
+export const COST_KINDS = ["cost", "rebate", "discount"];
 
 export default (sequelize, DataTypes) => {
     const QuoteCost = sequelize.define(
@@ -8,7 +12,8 @@ export default (sequelize, DataTypes) => {
         {
             id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
             quoteId: { type: DataTypes.INTEGER, allowNull: false },
-            costType: { type: DataTypes.STRING(50), allowNull: false },
+            kind: { type: DataTypes.STRING(20), allowNull: false, defaultValue: "cost", validate: { isIn: [COST_KINDS] } },
+            costType: { type: DataTypes.STRING(50), allowNull: false, defaultValue: "" },
             calcType: {
                 type: DataTypes.STRING(20),
                 allowNull: false,

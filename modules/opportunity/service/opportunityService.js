@@ -7,12 +7,13 @@ import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { hasDocumentOfType, presentDocument } from "./leadAttachmentService.js";
 import { isEstimationReady, preSiteInspectionBlocker } from "./estimationService.js";
-import { PROCUREMENT_STAGE, enterProcurement, procurementBlocker } from "./procurementService.js";
+import { CONSTRUCTION_STAGE, PROCUREMENT_STAGE, constructionBlocker, enterProcurement, procurementBlocker } from "./procurementService.js";
 import { quoteHasItems, quoteIsGenerated } from "./quoteService.js";
 import { notify } from "../../notification/service/notificationService.js";
 import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
+import { SERVICE_REQUIREMENTS, serviceRequirementKeys } from "../model/opportunity.js";
 // approvalsService imports moveToNextStage from here in turn (the last
 // approval moves the job on); both only call each other at request time.
 import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, installedSystemSummary, sanitizeRequiredApprovals } from "./approvalsService.js";
@@ -43,7 +44,7 @@ const LEAD_FIELDS = [
     "qualification", "qualificationAuthority", "qualificationTiming",
     "estimatedValue", "nextAction", "nextActionDueAt",
     "energyAnnualKwh", "energyHasBills", "energyNotes",
-    "leadSource", "leadSourceDetails", "referrerId", "involvementTier", "leadType",
+    "leadSource", "leadSourceDetails", "referrerId", "referrerName", "involvementTier", "leadType",
     "needsClientContact", "contactAttempts",
     "hasOwnerDiscount", "ownerDiscountName", "ownerDiscountAmount",
     "needsClientVisit", "clientVisitReason", "customFields", "notPotentialReason",
@@ -75,11 +76,23 @@ const CHOICE_FIELDS = [
 const MAX_LENGTH = {
     siteMapUrl: 1000, leadSourceDetails: 500, customerAbn: 20, siteState: 10, sitePostcode: 10,
     siteJurisdiction: 10, customerFirstName: 100, customerLastName: 100, preferredLanguage: 40,
-    preferredInstallLocation: 255,
+    preferredInstallLocation: 255, referrerName: 255,
 };
 
 const toBool = (value) => value === true || value === 1 || value === "true" || value === "1";
 const text = (value, max) => String(value ?? "").trim().slice(0, max);
+
+/**
+ * The job requirement as stored: the ticked keys in the form's order,
+ * "solar,battery,ev". "both" (what leads carried before the checkboxes) is
+ * written as solar and battery. Null when nothing is ticked.
+ */
+const normalizeServiceRequirement = (value) => {
+    const keys = serviceRequirementKeys(value).flatMap((key) => (key === "both" ? ["solar", "battery"] : [key]));
+    const unknown = keys.filter((key) => !SERVICE_REQUIREMENTS.includes(key));
+    if (unknown.length) throw httpError(400, `serviceRequirement must be any of: ${SERVICE_REQUIREMENTS.join(", ")}`);
+    return SERVICE_REQUIREMENTS.filter((key) => keys.includes(key)).join(",") || null;
+};
 
 // [{ method, contactedAt, reached, reason, notes }] — kept as given, trimmed and capped.
 const sanitizeContactAttempts = (list) => {
@@ -119,6 +132,8 @@ const pickLeadFields = (payload) => {
     // has not answered yet arrives as "" from the form, which is "not set",
     // not an invalid choice — store it as null so the validator skips it.
     for (const field of CHOICE_FIELDS) if (picked[field] === "") picked[field] = null;
+    if (typeof picked.serviceRequirement === "string") picked.serviceRequirement = normalizeServiceRequirement(picked.serviceRequirement);
+    if (picked.referrerName !== undefined) picked.referrerName = picked.referrerName === null ? null : String(picked.referrerName).trim() || null;
     for (const numeric of NUMERIC_FIELDS) {
         if (picked[numeric] === "" || picked[numeric] === null) picked[numeric] = null;
         else if (picked[numeric] !== undefined && !Number.isFinite(Number(picked[numeric])))
@@ -149,18 +164,31 @@ const assertUserExists = async (id, label) => {
 };
 
 // Referrer-sourced leads need the referrer and a commission tier; any other
-// source must not carry referrer attribution.
+// source must not carry referrer attribution. The referrer is a registered
+// one (referrerId) or a name typed in (referrerName); a typed name that is a
+// registered referrer's organisation is linked to it, as the form does.
 const normalizeSource = async (fields) => {
     if (fields.leadSource !== undefined && !MANUAL_LEAD_SOURCES.includes(fields.leadSource))
         throw httpError(400, `leadSource must be one of: ${MANUAL_LEAD_SOURCES.join(", ")}`);
     if (fields.leadSource === "referrer") {
-        if (!fields.referrerId) throw httpError(400, "A referrer-sourced lead needs referrerId");
-        const referrer = await Referrer.findByPk(parseId(fields.referrerId, "referrer id"));
-        if (!referrer) throw httpError(400, "Unknown referrer");
-        fields.referrerId = referrer.id;
+        if (!fields.referrerId && fields.referrerName) {
+            const match = await Referrer.findOne({ where: { organisation: { [Op.iLike]: fields.referrerName.replace(/[\\%_]/g, "\\$&") } } });
+            if (match) fields.referrerId = match.id;
+        }
+        if (fields.referrerId) {
+            const referrer = await Referrer.findByPk(parseId(fields.referrerId, "referrer id"));
+            if (!referrer) throw httpError(400, "Unknown referrer");
+            fields.referrerId = referrer.id;
+            fields.referrerName = fields.referrerName || referrer.organisation;
+        } else if (!fields.referrerName) {
+            throw httpError(400, "A referrer-sourced lead needs its referrer — pick a registered one (referrerId) or type their name (referrerName)");
+        } else {
+            fields.referrerId = null;
+        }
         fields.involvementTier = fields.involvementTier || "lead_only";
     } else if (fields.leadSource !== undefined) {
         fields.referrerId = null;
+        fields.referrerName = null;
         fields.involvementTier = null;
     }
     return fields;
@@ -399,24 +427,27 @@ export const qualificationChecklistItems = (o, { billDocument = false, skipBills
     if (isBlank(o.siteLine1) || isBlank(o.siteSuburb) || isBlank(o.sitePostcode)) missing.push("site address");
     if (isBlank(o.customerEmail)) missing.push("customer email");
     if (isBlank(o.customerPhone)) missing.push("customer phone");
-    if (isBlank(o.serviceRequirement)) missing.push("service requirement (solar, battery or both)");
+    if (isBlank(o.serviceRequirement)) missing.push("job requirement (solar, battery, EV or other)");
+    else if (serviceRequirementKeys(o.serviceRequirement).includes("other") && isBlank(o.estimationInput?.serviceRequirementOther))
+        missing.push("the job requirement typed in for Other");
     if (isBlank(o.billingSameAsSite)) missing.push("billing address confirmation");
     else if (o.billingSameAsSite === "no" && isBlank(o.customerBillingAddress)) missing.push("billing address");
     if (isBlank(o.propertyStoreys)) missing.push("house type");
     if (isBlank(o.roofType)) missing.push("roof type");
     if (isBlank(o.electricalPhase)) missing.push("electrical phase");
     if (!skipBills && !o.energyHasBills && !billDocument) missing.push("electricity bills");
-    if (isBlank(o.energyAnnualKwh)) missing.push("annual usage");
+    // Usage and the finance details are optional since UAT (Oct 2026): the
+    // bills carry the usage, and "yes" is the finance answer.
     if (isBlank(o.financeAssistance)) missing.push("finance assistance");
-    else if (o.financeAssistance === "yes" && isBlank(o.financeNotes)) missing.push("what finance assistance is needed");
     if (!o.siteRequirementsNone && isBlank(o.siteSpecificRequirements))
         missing.push("site-specific requirements (or none identified)");
     if (isBlank(o.preferredInstallTimeframe)) missing.push("preferred installation timeframe");
     if (isBlank(o.preferredInstallLocation)) missing.push("preferred installation location");
     if (!o.customerIntentConfirmed) missing.push("confirmation the customer is genuinely interested");
     if (isBlank(o.customerComments)) missing.push("initial requirements and comments");
-    if (isBlank(o.leadSource) || (MANUAL_LEAD_SOURCES.includes(o.leadSource) && isBlank(o.leadSourceDetails)))
-        missing.push("lead source details");
+    // The source is the answer; the details beside it are optional.
+    if (isBlank(o.leadSource)) missing.push("lead source");
+    else if (o.leadSource === "referrer" && !o.referrerId && isBlank(o.referrerName)) missing.push("the referrer");
     return missing;
 };
 
@@ -493,34 +524,40 @@ export const updateLead = async (id, payload = {}, actor) => {
     const fields = pickLeadFields(payload);
     if (fields.customerLegalName !== undefined && !fields.customerLegalName?.trim())
         throw httpError(400, "customerLegalName cannot be blank");
-    if (fields.qualification === "qualified" && opportunity.qualification !== "qualified")
-        await assertCanQualify({ ...opportunity.get({ plain: true }), ...fields });
-    assertQualificationConsistent(fields);
+    // The optional checklist rows are merged, never replaced: sales and the
+    // estimator both write into the same object and must not wipe each other.
+    // Merged before the checklist is checked, which reads one of them (the
+    // "Other" job requirement).
+    if (fields.estimationInput !== undefined)
+        fields.estimationInput = { ...(opportunity.estimationInput || {}), ...fields.estimationInput };
     // The source is only checked when the request changes it. Edits send just
     // the fields that changed, so a save that leaves the source alone must not
     // be refused for a referrer it did not mention — nor reset the commission
     // tier, nor fail on a source an integration set.
-    if (["leadSource", "referrerId", "involvementTier"].some((key) => fields[key] !== undefined)) {
+    if (["leadSource", "referrerId", "referrerName", "involvementTier"].some((key) => fields[key] !== undefined)) {
         fields.leadSource = fields.leadSource ?? opportunity.leadSource;
         if (fields.leadSource === "referrer") {
-            if (fields.referrerId === undefined) fields.referrerId = opportunity.referrerId;
+            // A new name without a new id is a different referrer, so the old
+            // link goes; a new id without a name takes the referrer's own.
+            const nameGiven = fields.referrerName !== undefined;
+            const idGiven = fields.referrerId !== undefined;
+            if (!idGiven) fields.referrerId = nameGiven ? null : opportunity.referrerId;
+            if (!nameGiven && !idGiven) fields.referrerName = opportunity.referrerName;
             if (fields.involvementTier === undefined) fields.involvementTier = opportunity.involvementTier;
         }
         await normalizeSource(fields);
     }
+    if (fields.qualification === "qualified" && opportunity.qualification !== "qualified")
+        await assertCanQualify({ ...opportunity.get({ plain: true }), ...fields });
+    assertQualificationConsistent(fields);
     if (fields.estimatorId !== undefined)
         fields.estimatorId = await assertUserExists(fields.estimatorId, "estimator");
     if (fields.salespersonId !== undefined)
         fields.salespersonId = await assertUserExists(fields.salespersonId, "salesperson");
     if (fields.requiredApprovals !== undefined)
-        assertApprovalKeys(fields.requiredApprovals, await BusinessUnit.findByPk(opportunity.businessUnitId));
+        assertApprovalKeys(fields.requiredApprovals, await BusinessUnit.findByPk(opportunity.businessUnitId), opportunity);
     if (payload.lifecycle !== undefined) fields.lifecycle = payload.lifecycle; // model validates the value
     const lifecycleWas = opportunity.lifecycle;
-
-    // The optional checklist rows are merged, never replaced: sales and the
-    // estimator both write into the same object and must not wipe each other.
-    if (fields.estimationInput !== undefined)
-        fields.estimationInput = { ...(opportunity.estimationInput || {}), ...fields.estimationInput };
 
     // A lead edited after it was handed over leaves a mark the estimator's
     // screen picks up (cleared by estimation/acknowledge-lead-change).
@@ -593,22 +630,28 @@ export const advanceStage = async (id, actor, message = {}) => {
         if (!accepted) throw httpError(400, "The customer has not accepted a proposal yet");
     }
 
-    // Leaving approvals needs every required approval approved (the last one
-    // normally moves the job on by itself — see approvalsService). A job that
-    // needed none is moved by hand from here.
+    // Leaving approvals needs every required approval approved — one marked
+    // not applicable is not waited on (the last one normally moves the job on
+    // by itself — see approvalsService). A job that needed none, or whose
+    // last one was marked not applicable, is moved by hand from here.
     if (opportunity.stage === APPROVALS_STAGE) {
         const waiting = await db.Approval.findAll({
-            where: { opportunityId: opportunity.id, required: true, status: { [Op.ne]: "approved" } },
+            where: { opportunityId: opportunity.id, required: true, status: { [Op.notIn]: ["approved", "not_applicable"] } },
             attributes: ["label"],
             order: [["id", "ASC"]],
         });
         if (waiting.length) throw httpError(400, `Waiting on approvals: ${waiting.map((row) => row.label).join(", ")}`);
     }
 
-    // Leaving procurement needs the materials confirmed ready and the Green
-    // Deal job created — the coordinator's CL-14 and CL-10.
+    // Leaving procurement needs the purchase order released (CL-13); leaving
+    // construction needs the materials confirmed ready (CL-14) and the Green
+    // Deal job created (CL-10), which construction works.
     if (opportunity.stage === PROCUREMENT_STAGE) {
         const blocker = await procurementBlocker(opportunity);
+        if (blocker) throw httpError(400, blocker);
+    }
+    if (opportunity.stage === CONSTRUCTION_STAGE) {
+        const blocker = await constructionBlocker(opportunity);
         if (blocker) throw httpError(400, blocker);
     }
 

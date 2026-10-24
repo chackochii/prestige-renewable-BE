@@ -13,7 +13,7 @@ import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { unitDate } from "../../../utils/unitTime.js";
 import { PROJECT_TYPES, TAX_TREATMENTS } from "../model/quote.js";
-import { COST_CALC_TYPES } from "../model/quoteCost.js";
+import { COST_CALC_TYPES, COST_KINDS } from "../model/quoteCost.js";
 import { recordSystemEvent } from "./leadWorkflowService.js";
 
 const { Opportunity, BusinessUnit, Quote, QuoteItem, QuoteCost, QuoteVersion, CatalogItem, User, sequelize } = db;
@@ -59,7 +59,8 @@ export const presentItem = (row) => ({
 
 export const presentCost = (row) => ({
     id: row.id,
-    costType: row.costType,
+    kind: row.kind || "cost",
+    costType: row.costType || "",
     calcType: row.calcType,
     value: Number(row.value) || 0,
     description: row.description || "",
@@ -72,7 +73,7 @@ export const presentQuote = (quote, opportunity) => ({
     customer: opportunity.customerLegalName || opportunity.customerTradingName || "",
     estimatorName: opportunity.estimator?.name ?? null,
     project: quote.project || "",
-    projectType: quote.projectType,
+    projectType: quote.projectType || "",
     projectTypeOther: quote.projectTypeOther || "",
     quoteDate: quote.quoteDate || null,
     taxTreatment: quote.taxTreatment,
@@ -143,10 +144,12 @@ export const updateQuote = async (id, payload = {}) => {
     const update = {};
     if (payload.project !== undefined) update.project = text(payload.project, 255) || null;
     if (payload.projectType !== undefined) {
-        if (!PROJECT_TYPES.includes(payload.projectType))
+        // Blank puts it back to "not picked yet".
+        const projectType = payload.projectType === null ? "" : String(payload.projectType).trim();
+        if (projectType && !PROJECT_TYPES.includes(projectType))
             throw httpError(400, `projectType must be one of: ${PROJECT_TYPES.join(", ")}`);
-        update.projectType = payload.projectType;
-        if (payload.projectType !== "Other") update.projectTypeOther = null;
+        update.projectType = projectType || null;
+        if (projectType !== "Other") update.projectTypeOther = null;
     }
     if (payload.projectTypeOther !== undefined) update.projectTypeOther = text(payload.projectTypeOther, 255) || null;
     if (payload.quoteDate !== undefined) {
@@ -263,10 +266,13 @@ const costFields = (payload, current = null) => {
     const has = (key) => payload[key] !== undefined;
     const partial = Boolean(current);
 
-    if (has("costType") || !partial) {
-        fields.costType = text(payload.costType, 50);
-        if (!fields.costType) throw httpError(400, "costType is required");
+    // A new line has no type until the estimator picks one from its section's list.
+    if (has("kind") || !partial) {
+        const kind = payload.kind ?? "cost";
+        if (!COST_KINDS.includes(kind)) throw httpError(400, `kind must be one of: ${COST_KINDS.join(", ")}`);
+        fields.kind = kind;
     }
+    if (has("costType") || !partial) fields.costType = text(payload.costType, 50);
     if (has("calcType") || !partial) {
         const calcType = payload.calcType ?? "fixed";
         if (!COST_CALC_TYPES.includes(calcType)) throw httpError(400, `calcType must be one of: ${COST_CALC_TYPES.join(", ")}`);
@@ -396,6 +402,9 @@ export const createVersion = async (id, payload = {}, actor) => {
             `This quote has already been generated${quote.generatedVersion ? ` as version ${quote.generatedVersion.version}` : ""} — create a new quote to generate another version`
         );
     if (!quote.items?.length) throw httpError(400, "Add at least one item before generating the quote");
+    // Lines start with no type; the customer's copy names each one by it.
+    if ((quote.additionalCosts || []).some((cost) => !String(cost.costType ?? "").trim()))
+        throw httpError(400, "Choose a type for every cost, rebate and discount line before generating the quote");
 
     const snapshot = payload.snapshot;
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot))

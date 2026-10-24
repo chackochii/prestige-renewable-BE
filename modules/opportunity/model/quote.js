@@ -5,7 +5,7 @@
 // It is a `draft` while it is being built (every edit saves straight away)
 // and `generated` once it has been frozen as a version — locked, nothing on
 // it can change. A new quote takes the lock off again (quoteService).
-export const PROJECT_TYPES = ["Solar", "Battery", "Solar + Battery", "Other"];
+export const PROJECT_TYPES = ["Solar", "Battery", "Solar + Battery", "EV", "Other"];
 export const TAX_TREATMENTS = ["exclusive", "inclusive", "no_gst"];
 export const QUOTE_STATUSES = ["draft", "generated"];
 
@@ -17,10 +17,10 @@ export default (sequelize, DataTypes) => {
             opportunityId: { type: DataTypes.INTEGER, allowNull: false, unique: true },
             quoteNumber: { type: DataTypes.STRING(40), allowNull: false }, // e.g. PRS-Q-26-0008
             project: { type: DataTypes.STRING },
+            // Null until the estimator picks one ("Select from options").
             projectType: {
                 type: DataTypes.STRING(40),
-                allowNull: false,
-                defaultValue: "Solar",
+                allowNull: true,
                 validate: { isIn: [PROJECT_TYPES] },
             },
             projectTypeOther: { type: DataTypes.STRING },

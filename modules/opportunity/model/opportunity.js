@@ -6,11 +6,29 @@
 // Lead-checklist option keys. These mirror
 // prestige-fe/src/features/leads/propertyOptions.js — keep them in step, the
 // screens label them from the same keys.
-export const SERVICE_REQUIREMENTS = ["solar", "battery", "both"];
+//
+// The job requirement is any of SERVICE_REQUIREMENTS, ticked as checkboxes and
+// stored as a list ("solar,battery"); "both" is what leads saved before carry,
+// read as solar and battery. "other" comes with the requirement typed in
+// (estimationInput.serviceRequirementOther).
+export const SERVICE_REQUIREMENTS = ["solar", "battery", "ev", "other"];
+export const LEGACY_SERVICE_REQUIREMENTS = ["both"];
 export const STOREY_OPTIONS = ["single", "double"];
 export const ROOF_TYPES = ["tin", "tile", "colorbond"];
 export const ELECTRICAL_PHASES = ["1_phase", "3_phase"];
-export const INSTALL_TIMEFRAMES = ["asap", "1_3_months", "3_6_months", "6_months_plus", "undecided"];
+// The week-based timeframes came in with UAT (Oct 2026); "8_weeks_plus" is no
+// longer offered, but a lead saved with it keeps it.
+export const INSTALL_TIMEFRAMES = [
+    "asap", "1_2_weeks", "2_4_weeks", "4_8_weeks", "1_3_months", "3_6_months", "6_months_plus", "undecided",
+    "8_weeks_plus",
+];
+
+/** "solar,battery" → ["solar", "battery"]: the keys a stored job requirement lists. */
+export const serviceRequirementKeys = (value) =>
+    String(value ?? "")
+        .split(",")
+        .map((key) => key.trim())
+        .filter(Boolean);
 
 /**
  * The optional checklist rows estimation inherits, stored as one object on
@@ -18,7 +36,9 @@ export const INSTALL_TIMEFRAMES = ["asap", "1_3_months", "3_6_months", "6_months
  * prestige-fe/src/constants/estimationInput.js for the same list.
  */
 export const ESTIMATION_INPUT_KEYS = [
-    // Project & site
+    // Project & site — the "Other" job requirement in words, and a commercial
+    // building's type (warehouse, shopping complex)
+    "serviceRequirementOther", "buildingTypeDetails",
     "siteType", "preSiteInspectionRequired", "siteCrewAssigneeId", "inspectionStatus",
     "siteVisitCompleted", "sitePhotosOnFile", "roofMeasurements",
     // Existing electrical
@@ -71,6 +91,9 @@ export default (sequelize, DataTypes) => {
             // campaign/ad attribution is one join away.
             inboundLeadId: { type: DataTypes.INTEGER, allowNull: true },
             referrerId: { type: DataTypes.INTEGER, allowNull: true },
+            // The referrer as sales typed it. A registered referrer is linked
+            // through referrerId as well; one who is not stays a name only.
+            referrerName: { type: DataTypes.STRING(255), allowNull: true },
             // Marketing campaign the lead is attributed to (null = exception / organic)
             campaignId: { type: DataTypes.INTEGER, allowNull: true },
             leadType: {
@@ -212,7 +235,16 @@ export default (sequelize, DataTypes) => {
             // ---- Lead checklist: what sales confirms with the customer ------
             // The mandatory rows gate "potential client" (see assertCanQualify);
             // the option keys mirror prestige-fe/src/features/leads/propertyOptions.js.
-            serviceRequirement: { type: DataTypes.STRING(20), validate: { isIn: [SERVICE_REQUIREMENTS] } },
+            serviceRequirement: {
+                type: DataTypes.STRING(60),
+                validate: {
+                    isKnownList(value) {
+                        const known = [...SERVICE_REQUIREMENTS, ...LEGACY_SERVICE_REQUIREMENTS];
+                        const unknown = serviceRequirementKeys(value).filter((key) => !known.includes(key));
+                        if (unknown.length) throw new Error(`serviceRequirement: unknown option ${unknown.join(", ")}`);
+                    },
+                },
+            },
             propertyStoreys: { type: DataTypes.STRING(10), validate: { isIn: [STOREY_OPTIONS] } },
             roofType: { type: DataTypes.STRING(20), validate: { isIn: [ROOF_TYPES] } },
             electricalPhase: { type: DataTypes.STRING(10), validate: { isIn: [ELECTRICAL_PHASES] } },
@@ -241,6 +273,10 @@ export default (sequelize, DataTypes) => {
             // catalogue, picked by sales on the lead or by estimation. Stage 5
             // creates one approvals row per key (approvalsService).
             requiredApprovals: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+            // Approvals the unit's catalogue does not have, added to this job
+            // only: [{ key, label }]. Their keys can be in requiredApprovals
+            // like any catalogue key (approvalsService.jobCatalogueFor).
+            customApprovalTypes: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
 
             // ---- Re-quote (stage 3 → 2) ----------------------------------------
             // Set while a requote_requests row is open — the customer asked for

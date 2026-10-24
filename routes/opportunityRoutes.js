@@ -120,7 +120,7 @@ router.post("/:id/requotes", write, proposals.requestRequote); // { comments, es
 // (leads.update), estimation (estimation.update) or the coordinator
 // (approvals.update); each one is then lodged and decided by the coordinator.
 router.get("/:id/approvals", requireAnyPermission("approvals.read", "leads.read", "estimation.read"), approvals.list); // → { items: [...], history, notifications, … }
-router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...] } → the opportunity; ?view=approvals → the job's approvals
+router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...], custom?: [{ label }] } → the opportunity; ?view=approvals → the job's approvals
 router.patch("/:id/approvals/:type", requirePermission("approvals.update"), approvals.update); // { status?, authority?, reference?, submittedAt?, decidedAt?, note?, documentName?, checklist? } → the job's approvals
 
 // Procurement & delivery (stage 6). The Operations Coordinator works the BOQ,
@@ -207,7 +207,7 @@ router.patch("/:id/quote", estimate, updateQuote); // { project?, projectType?, 
 router.post("/:id/quote/items", estimate, addQuoteItem); // { itemKey, itemName, brand, unit, quantity, unitPrice, discountPct } → item
 router.patch("/:id/quote/items/:itemId", estimate, updateQuoteItem); // → item
 router.delete("/:id/quote/items/:itemId", estimate, deleteQuoteItem);
-router.post("/:id/quote/costs", estimate, addQuoteCost); // { costType, calcType, value, description } → cost
+router.post("/:id/quote/costs", estimate, addQuoteCost); // { kind?, costType?, calcType, value, description } → cost
 router.patch("/:id/quote/costs/:costId", estimate, updateQuoteCost); // → cost
 router.delete("/:id/quote/costs/:costId", estimate, deleteQuoteCost);
 

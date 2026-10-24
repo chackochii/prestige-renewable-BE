@@ -53,6 +53,25 @@ const labelFor = (catalogue, key) => catalogue.find((type) => type.key === key)?
 
 const currentKeys = (opportunity) => (Array.isArray(opportunity.requiredApprovals) ? opportunity.requiredApprovals : []);
 
+/** The approvals added to this job only (opportunity.customApprovalTypes): [{ key, label }]. */
+const customTypesOf = (opportunity) =>
+    (Array.isArray(opportunity?.customApprovalTypes) ? opportunity.customApprovalTypes : []).filter(
+        (type) => type && typeof type.key === "string" && type.key.trim()
+    );
+
+/**
+ * The approvals one job can need: the unit's catalogue, then the custom ones
+ * added to the job — mirrors prestige-fe helpers/requiredApprovals.js
+ * jobApprovalUnit. A custom key the unit has since added keeps the unit's label.
+ */
+export const jobCatalogueFor = (unit, opportunity) => {
+    const listed = catalogueFor(unit);
+    const custom = customTypesOf(opportunity)
+        .map((type) => ({ key: type.key.trim(), label: oneLine(type.label, 120) || type.key.trim() }))
+        .filter((type) => !listed.some((candidate) => candidate.key === type.key));
+    return [...listed, ...custom];
+};
+
 /** An array of approval keys as the API accepts it — trimmed, deduplicated, capped. */
 export const sanitizeRequiredApprovals = (list) => {
     if (!Array.isArray(list)) throw httpError(400, "requiredApprovals must be an array of approval keys");
@@ -60,13 +79,49 @@ export const sanitizeRequiredApprovals = (list) => {
     return [...new Set(list.map((key) => oneLine(key, 20)).filter(Boolean))];
 };
 
-/** Keys must come from the unit's catalogue — a unit with no approvals section accepts none. */
-export const assertApprovalKeys = (keys, unit) => {
-    const known = new Set(catalogueFor(unit).map((type) => type.key));
+/**
+ * Keys must come from the unit's catalogue, or from the custom approvals
+ * already added to `opportunity` — a unit with no approvals section accepts
+ * none of its own.
+ */
+export const assertApprovalKeys = (keys, unit, opportunity = null) => {
+    const known = new Set(jobCatalogueFor(unit, opportunity).map((type) => type.key));
     const unknown = keys.filter((key) => !known.has(key));
     if (unknown.length)
         throw httpError(400, `Unknown approval type${unknown.length > 1 ? "s" : ""} for this business unit: ${unknown.join(", ")}`);
     return keys;
+};
+
+/** [{ label }] — the custom approvals a request names, trimmed and deduplicated by name. */
+const sanitizeCustomApprovals = (list) => {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list)) throw httpError(400, "custom must be a list of { label }");
+    if (list.length > 10) throw httpError(400, "custom: at most 10 approvals at a time");
+    const labels = list.map((entry) => oneLine(typeof entry === "string" ? entry : entry?.label, 120)).filter(Boolean);
+    if (labels.length !== list.length) throw httpError(400, "custom: every approval needs a name (label)");
+    return [...new Map(labels.map((label) => [label.toLowerCase(), label])).values()];
+};
+
+/**
+ * The key each named approval goes under. A name the job's list already has
+ * (the unit's or an earlier custom one, matched without case) is that
+ * approval, so the same thing is never added twice; anything new becomes a
+ * custom type on the job, keyed custom_1, custom_2, … in the order added.
+ */
+const keysForCustom = (labels, catalogue, customTypes) => {
+    const types = [...customTypes];
+    const keys = labels.map((label) => {
+        const known = catalogue.find((type) => type.label.toLowerCase() === label.toLowerCase());
+        if (known) return known.key;
+        const taken = new Set([...catalogue, ...types].map((type) => type.key));
+        let n = types.length + 1;
+        while (taken.has(`custom_${n}`)) n += 1;
+        const type = { key: `custom_${n}`, label };
+        types.push(type);
+        catalogue = [...catalogue, type];
+        return type.key;
+    });
+    return { keys, types };
 };
 
 const loadOpportunity = async (id) => {
@@ -99,16 +154,25 @@ const syncRows = async (opportunity, catalogue) => {
 };
 
 /**
- * { keys: [...] } → the opportunity. Who may: sales (leads.update),
- * estimation (estimation.update) or the coordinator (approvals.update) — the
- * route decides; this validates against the unit's catalogue, records the
- * change, and keeps the stage-5 rows in step when the job is already there.
+ * { keys: [...], custom?: [{ label }] } → the opportunity. Who may: sales
+ * (leads.update), estimation (estimation.update) or the coordinator
+ * (approvals.update) — the route decides; this validates against the job's
+ * catalogue, records the change, and keeps the stage-5 rows in step when the
+ * job is already there. `custom` names approvals the unit's list lacks: each
+ * is added to this job only (customApprovalTypes) and ticked with `keys`.
  */
 export const setRequiredApprovals = async (id, payload = {}, actor) => {
     const opportunity = await loadOpportunity(id);
     const unit = await BusinessUnit.findByPk(opportunity.businessUnitId);
-    const catalogue = catalogueFor(unit);
-    const keys = assertApprovalKeys(sanitizeRequiredApprovals(payload.keys ?? payload.requiredApprovals ?? []), unit);
+    const requested = assertApprovalKeys(sanitizeRequiredApprovals(payload.keys ?? payload.requiredApprovals ?? []), unit, opportunity);
+
+    const labels = sanitizeCustomApprovals(payload.custom);
+    const { keys: customKeys, types } = keysForCustom(labels, jobCatalogueFor(unit, opportunity), customTypesOf(opportunity));
+    const keys = [...new Set([...requested, ...customKeys])];
+    if (keys.length > 20) throw httpError(400, "requiredApprovals: at most 20 entries");
+    const typesAdded = types.length > customTypesOf(opportunity).length;
+    if (typesAdded) await opportunity.update({ customApprovalTypes: types });
+    const catalogue = jobCatalogueFor(unit, opportunity);
 
     const before = currentKeys(opportunity);
     const changed = keys.length !== before.length || keys.some((key) => !before.includes(key));
@@ -133,7 +197,7 @@ export const setRequiredApprovals = async (id, payload = {}, actor) => {
  */
 export const enterApprovals = async (opportunity, actor = null) => {
     const unit = await BusinessUnit.findByPk(opportunity.businessUnitId);
-    const catalogue = catalogueFor(unit);
+    const catalogue = jobCatalogueFor(unit, opportunity);
     await syncRows(opportunity, catalogue);
     const keys = currentKeys(opportunity);
     const labels = keys.map((key) => labelFor(catalogue, key));
@@ -237,9 +301,11 @@ const presentNotice = (row) => ({ at: row.createdAt, rule: row.event, to: row.us
  * system and total), its required approvals in catalogue order, its history
  * and the notifications this stage raised. The board and the detail view
  * return the same shape, so the approvals page loads once and opens any of
- * its jobs without asking again.
+ * its jobs without asking again. `catalogue` is the unit's: the job's own
+ * custom approvals are added to it here.
  */
-const presentJob = (opportunity, { catalogue, rows, accepted, salesperson = null, history = null, notifications = null }) => {
+const presentJob = (opportunity, { catalogue: unitCatalogue, rows, accepted, salesperson = null, history = null, notifications = null }) => {
+    const catalogue = jobCatalogueFor({ approvalTypes: unitCatalogue }, opportunity);
     const order = new Map(catalogue.map((type, index) => [type.key, index]));
     const items = rows
         .filter((row) => row.opportunityId === opportunity.id && row.required)
@@ -456,13 +522,17 @@ const parseDate = (value, field) => {
 
 const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-/** Every required approval approved — and there is at least one. */
+/**
+ * Every required approval approved — one marked not applicable is not waited
+ * on — and at least one was approved (mirrors prestige-fe helpers/approvals.js
+ * applicableItems).
+ */
 const allApproved = async (opportunityId) => {
-    const [required, waiting] = await Promise.all([
-        Approval.count({ where: { opportunityId, required: true } }),
-        Approval.count({ where: { opportunityId, required: true, status: { [Op.ne]: "approved" } } }),
+    const [applicable, waiting] = await Promise.all([
+        Approval.count({ where: { opportunityId, required: true, status: { [Op.ne]: "not_applicable" } } }),
+        Approval.count({ where: { opportunityId, required: true, status: { [Op.notIn]: ["approved", "not_applicable"] } } }),
     ]);
-    return required > 0 && waiting === 0;
+    return applicable > 0 && waiting === 0;
 };
 
 /** What a status change means for the people on the job, and the record. */
@@ -483,7 +553,8 @@ const afterStatusChange = async (opportunity, row, actor) => {
         return;
     }
 
-    if (row.status === "approved" && opportunity.stage === APPROVALS_STAGE && opportunity.lifecycle === "Active" && (await allApproved(opportunity.id))) {
+    // The last one settled moves the job on — approved, or the last outstanding one marked not applicable.
+    if (["approved", "not_applicable"].includes(row.status) && opportunity.stage === APPROVALS_STAGE && opportunity.lifecycle === "Active" && (await allApproved(opportunity.id))) {
         await recordSystemEvent(opportunity, "All approvals received — on to procurement", actor);
         const title = `${opportunity.number}: all approvals received — start procurement`;
         const body = `${customerLabel(opportunity)} — every required approval is in. Create the job and start procurement.`;

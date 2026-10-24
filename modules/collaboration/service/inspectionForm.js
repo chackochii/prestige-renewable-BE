@@ -8,8 +8,10 @@
 // (defaulting to today); the submission date is recorded by the server when
 // the form is sent. The signature is always required — it is the sign-off.
 //
-// Keys match prestige-fe/src/constants/inspectionReport.js, so a requester's
-// ticked checklist items and the form's answers line up.
+// Keys, labels and order match prestige-fe/src/constants/inspectionReport.js,
+// so a requester's ticked checklist items and the form's answers line up.
+// "Estimation team notified" left the final check in UAT (Oct 2026): sending
+// the form notifies them anyway.
 
 export const SITE_PHOTOS_KEY = "site_photos";
 
@@ -17,32 +19,33 @@ export const INSPECTION_FORM = [
     // Job details
     { key: "inspectionDate", label: "Inspection date", kind: "date", section: "Job Details", required: true },
 
-    // Site inspection
-    { key: "siteAccessConfirmed", label: "Site address and property access confirmed", kind: "checkbox", section: "Site Inspection" },
-    { key: "roofCondition", label: "Roof condition and roof type", kind: "text", section: "Site Inspection" },
-    { key: "roofDimensions", label: "Roof dimensions and available installation area", kind: "text", section: "Site Inspection" },
-    { key: "roofPitch", label: "Roof pitch and orientation", kind: "text", section: "Site Inspection" },
-    { key: "shading", label: "Shading or obstructions identified", kind: "textarea", section: "Site Inspection" },
-    { key: "switchboard", label: "Switchboard location and condition", kind: "textarea", section: "Site Inspection" },
-    { key: "meter", label: "Meter location and meter type", kind: "text", section: "Site Inspection" },
-    { key: "inverterLocation", label: "Proposed inverter location", kind: "text", section: "Site Inspection" },
-    { key: "batteryLocation", label: "Proposed battery location", kind: "text", section: "Site Inspection" },
-    { key: "cablePathway", label: "Cable pathway and approximate cable length", kind: "text", section: "Site Inspection" },
-    { key: "accessDifficulties", label: "Access or installation difficulties identified", kind: "textarea", section: "Site Inspection" },
-    { key: "scaffoldRequired", label: "Scaffolding or EWP (elevated work platform) required", kind: "checkbox", section: "Site Inspection" },
-    { key: "additionalWork", label: "Additional electrical or building work noted", kind: "textarea", section: "Site Inspection" },
-    { key: "unconfirmed", label: "Anything that cannot be confirmed from photos or mapping", kind: "textarea", section: "Site Inspection" },
+    // Site inspection — what the requester picks from on the request
+    { key: "roofCondition", label: "Roof Condition and Roof Type", kind: "text", section: "Site Inspection" },
+    { key: "roofDimensions", label: "Roof Dimensions and Available Installation Area", kind: "text", section: "Site Inspection" },
+    { key: "roofPitch", label: "Roof Pitch and Orientation", kind: "text", section: "Site Inspection" },
+    { key: "shading", label: "Shading or Obstructions", kind: "textarea", section: "Site Inspection" },
+    { key: "switchboard", label: "Switchboard Location and Condition", kind: "textarea", section: "Site Inspection" },
+    { key: "meter", label: "Meter Location and Meter Type", kind: "text", section: "Site Inspection" },
+    { key: "inverterLocation", label: "Proposed Inverter Location", kind: "text", section: "Site Inspection" },
+    { key: "batteryLocation", label: "Proposed Battery Location", kind: "text", section: "Site Inspection" },
+    { key: "cablePathway", label: "Cable Pathway and Approximate Cable Length", kind: "text", section: "Site Inspection" },
+    { key: "scaffoldRequired", label: "Scaffolding or Elevated Work Platform (EWP) Requirements", kind: "checkbox", section: "Site Inspection" },
 
-    // Photos & notes (the photos themselves upload to the SITE_PHOTOS_KEY slot)
-    { key: "measurements", label: "Measurements and site observations", kind: "textarea", section: "Photos & Notes" },
-    { key: "risks", label: "Risks or special requirements", kind: "textarea", section: "Photos & Notes" },
-    { key: "estimationComments", label: "Comments for the Estimation team", kind: "textarea", section: "Photos & Notes" },
+    // Site access & observations — on every crew form; the requester does not pick these
+    { key: "siteAccessConfirmed", label: "Site address and property access confirmed?", kind: "checkbox", section: "Site Access & Observations" },
+    { key: "accessDifficulties", label: "Any access or installation difficulties identified?", kind: "textarea", section: "Site Access & Observations" },
+    { key: "additionalWork", label: "Any additional electrical or building work identified?", kind: "textarea", section: "Site Access & Observations" },
+    { key: "measurements", label: "Measurements and Other Site Observations", kind: "textarea", section: "Site Access & Observations" },
+    { key: "risks", label: "Risks or Special Requirements", kind: "textarea", section: "Site Access & Observations" },
+    { key: "unconfirmed", label: "Is there anything that cannot be confirmed from photos or mapping?", kind: "textarea", section: "Site Access & Observations" },
+    { key: "estimationComments", label: "Additional Comments for the Estimation Team", kind: "textarea", section: "Site Access & Observations" },
+
+    // Photos upload to the SITE_PHOTOS_KEY slot.
 
     // Final check
     { key: "findingsRecorded", label: "All site findings recorded", kind: "checkbox", section: "Final Check" },
     { key: "photosUploaded", label: "Photos uploaded", kind: "checkbox", section: "Final Check" },
     { key: "measurementsRecorded", label: "Measurements recorded", kind: "checkbox", section: "Final Check" },
-    { key: "estimationNotified", label: "Estimation team notified of any special requirements", kind: "checkbox", section: "Final Check" },
 
     // Sign-off
     { key: "signature", label: "Site crew member signature", kind: "signature", section: "Sign-off", required: true },
