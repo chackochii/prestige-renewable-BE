@@ -28,3 +28,34 @@ export const setRequired = asyncHandler(async (req, res) => {
 export const update = asyncHandler(async (req, res) => {
     successResponse(res, { data: await approvals.updateApproval(req.params.id, req.params.type, req.body, req.user) });
 });
+
+// The way out of approvals and back (UAT exit logic). Each answers with the job's approvals.
+
+/** { note?, files?: [{ id, filename, url }] } — a document or note on an approval, its status untouched. */
+export const addAddendum = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await approvals.addApprovalAddendum(req.params.id, req.params.type, req.body, req.user) });
+});
+
+/** { option, reason, newKey?, newLabel?, lostReason?, changes? } — a rejected approval resolved. */
+export const resolve = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await approvals.resolveRejection(req.params.id, req.params.type, req.body, req.user) });
+});
+
+/** { reason } — back to stage 5 from procurement or construction. */
+export const reopen = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await approvals.reopenApprovals(req.params.id, req.body, req.user) });
+});
+
+/** { reason } — On Hold; it cannot be sent to Procurement until resumed. */
+export const hold = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await approvals.holdApprovals(req.params.id, req.body, req.user) });
+});
+
+export const resume = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await approvals.resumeApprovals(req.params.id, req.user) });
+});
+
+/** { note? } — Approval Review Needed cleared. */
+export const review = asyncHandler(async (req, res) => {
+    successResponse(res, { data: await approvals.markApprovalsReviewed(req.params.id, req.body, req.user) });
+});

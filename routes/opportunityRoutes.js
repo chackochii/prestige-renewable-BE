@@ -82,7 +82,7 @@ router.use(tokenValidator);
 // the /:id scope below so "proposals" is never read as an opportunity id.
 router.get("/proposals", read, requireUnitAccess((req) => req.query.businessUnitId), proposals.board); // ?businessUnitId=&search= → [{ opportunity, latestQuoteVersion, proposal, proposalCount }]
 // The approvals page: stage-5 jobs with their required approvals (plus ones that moved on in the last 30 days).
-router.get("/approvals", requirePermission("approvals.read"), requireUnitAccess((req) => req.query.businessUnitId), approvals.board); // ?businessUnitId=&search= → [job]
+router.get("/approvals", requirePermission("approvals.read"), requireUnitAccess((req) => req.query.businessUnitId), approvals.board); // ?businessUnitId=&search=&filter= → [job]; filter: in_progress|ready|rejected|overdue|on_hold|returned|review|sent
 // The procurement page: stage-6 jobs, whole (plus ones that moved on in the last 30 days).
 router.get("/procurement", requirePermission("procurement.read"), requireUnitAccess((req) => req.query.businessUnitId), procurement.board); // ?businessUnitId=&search= → [job]
 
@@ -122,6 +122,16 @@ router.post("/:id/requotes", write, proposals.requestRequote); // { comments, es
 router.get("/:id/approvals", requireAnyPermission("approvals.read", "leads.read", "estimation.read"), approvals.list); // → { items: [...], history, notifications, … }
 router.put("/:id/required-approvals", requireAnyPermission("leads.update", "estimation.update", "approvals.update"), approvals.setRequired); // { keys: [...], custom?: [{ label }] } → the opportunity; ?view=approvals → the job's approvals
 router.patch("/:id/approvals/:type", requirePermission("approvals.update"), approvals.update); // { status?, authority?, reference?, submittedAt?, decidedAt?, note?, documentName?, checklist? } → the job's approvals
+// The way out and back (UAT exit logic, Oct 2026). Leaving is Send to
+// Procurement — POST /:id/advance { conditionsReviewed }. Reopening is decided
+// in the service (the unit's reopen roles, else approvals.approve), so the
+// route only asks for a foot in approvals. Each answers with the job's approvals.
+router.post("/:id/approvals/hold", requirePermission("approvals.update"), approvals.hold); // { reason }
+router.post("/:id/approvals/resume", requirePermission("approvals.update"), approvals.resume);
+router.post("/:id/approvals/review", requirePermission("approvals.update"), approvals.review); // { note? } — clears Approval Review Needed
+router.post("/:id/approvals/reopen", requireAnyPermission("approvals.read", "approvals.update", "approvals.approve"), approvals.reopen); // { reason } — stage 6/7 → 5
+router.post("/:id/approvals/:type/resolve", requirePermission("approvals.update"), approvals.resolve); // { option, reason, newKey?, newLabel?, lostReason?, changes? }
+router.post("/:id/approvals/:type/addenda", requireAnyPermission("approvals.update", "procurement.update"), approvals.addAddendum); // { note?, files?: [{ id, filename, url }] }
 
 // Procurement & delivery (stage 6). The Operations Coordinator works the BOQ,
 // quotes, orders and checklists (procurement.update); the Procurement Manager
@@ -150,12 +160,12 @@ router.get("/:id/meetings", readAny, getMeetings);
 router.post("/:id/meetings", write, createMeeting); // { attendees, outcome?, nextStep?, at? } → the entry
 router.delete("/:id/meetings/:meetingId", write, deleteMeeting);
 
-// Attachments as the lead/estimation/procurement screens see them: one file
-// per request with a category (photo | sketch | bill | document |
-// client_document | supplier_quote | purchase_order | delivery_receipt);
-// each comes back with a URL the browser can open directly.
-router.get("/:id/attachments", requireAnyPermission("leads.read", "estimation.read", "procurement.read"), getAttachments);
-router.post("/:id/attachments", requireAnyPermission("leads.update", "estimation.update", "procurement.update", "procurement.approve"), uploadSingleFile, createAttachment); // multipart: file + category
+// Attachments as the lead/estimation/approvals/procurement screens see them:
+// one file per request with a category (photo | sketch | bill | document |
+// client_document | approval | supplier_quote | purchase_order |
+// delivery_receipt); each comes back with a URL the browser can open directly.
+router.get("/:id/attachments", requireAnyPermission("leads.read", "estimation.read", "approvals.read", "procurement.read"), getAttachments);
+router.post("/:id/attachments", requireAnyPermission("leads.update", "estimation.update", "approvals.update", "procurement.update", "procurement.approve"), uploadSingleFile, createAttachment); // multipart: file + category
 
 // Generic documents (type, stage, label) for every pipeline stage.
 router.get("/:id/documents", readAny, getDocuments);

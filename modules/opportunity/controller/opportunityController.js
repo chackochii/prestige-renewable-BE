@@ -68,7 +68,8 @@ export const update = asyncHandler(async (req, res) => {
 });
 
 export const advance = asyncHandler(async (req, res) => {
-    const opportunity = await advanceStage(req.params.id, req.user);
+    // { conditionsReviewed } — sending a job on from approvals confirms the conditions were read.
+    const opportunity = await advanceStage(req.params.id, req.user, { conditionsReviewed: req.body?.conditionsReviewed === true });
 
     successResponse(res, { data: opportunity });
 });

@@ -300,6 +300,8 @@ const presentPurchaseOrder = (po) => ({
     receivedBy: po.receivedBy,
     createdById: po.createdById,
     createdAt: po.createdAt,
+    // { reason, at, by } — raised before the approvals were reopened; held until marked reviewed.
+    reviewFlag: po.reviewFlag ?? null,
 });
 
 /** "Estimator assigned — Jane" → { action, detail }; the history tab shows both lines. */
@@ -946,13 +948,21 @@ export const createPurchaseOrder = async (id, payload = {}, actor) => {
 
 /**
  * PATCH /:id/procurement/purchase-orders/:poId — { supplier?, lines?, total?, deliveryEta?,
- *   status?, sentAt?, scheduledFor?, deliveredAt?, receivedBy? }
- * Sending needs the variation cleared; scheduling needs a date; receiving stamps who and when.
+ *   status?, sentAt?, scheduledFor?, deliveredAt?, receivedBy?, reviewed? }
+ * Sending needs the variation cleared and no review flag; scheduling needs a
+ * date; receiving stamps who and when. { reviewed: true } clears the flag a
+ * reopening of the approvals put on it.
  */
 export const updatePurchaseOrder = async (id, poId, payload = {}, actor) => {
     const { opportunity, row } = await loadJob(id, actor);
     const po = await loadPurchaseOrder(opportunity, poId);
     const fields = {};
+    const events = [];
+    if (payload.reviewed === true && po.reviewFlag) {
+        fields.reviewFlag = null;
+        events.push(`Purchase order reviewed after the approvals were reopened — ${po.ref}`);
+    }
+    const flagged = po.reviewFlag && fields.reviewFlag !== null;
     if (payload.supplier !== undefined) {
         const supplier = oneLine(payload.supplier, 120);
         if (!supplier) throw httpError(400, "supplier cannot be blank");
@@ -968,11 +978,12 @@ export const updatePurchaseOrder = async (id, poId, payload = {}, actor) => {
     if (payload.scheduledFor !== undefined) fields.scheduledFor = dateOnly(payload.scheduledFor, "scheduledFor");
     if (payload.receivedBy !== undefined) fields.receivedBy = oneLine(payload.receivedBy, 120) || null;
 
-    const events = [];
     if (payload.status !== undefined && payload.status !== po.status) {
         const status = payload.status;
         if (!PURCHASE_ORDER_STATUSES.includes(status)) throw httpError(400, `status must be one of: ${PURCHASE_ORDER_STATUSES.join(", ")}`);
         if (status === "draft") throw httpError(400, "An order that has gone to the supplier cannot go back to draft");
+        if (po.status === "draft" && flagged)
+            throw httpError(409, `${po.ref} is flagged for review since the approvals were reopened — check it still matches them and mark it reviewed first`);
         if (po.status === "draft" && !readyToOrder(row)) throw httpError(400, heldMessage(row));
         if (po.status === "draft") {
             fields.sentAt = parseDate(payload.sentAt, "sentAt") ?? new Date();
@@ -1041,12 +1052,15 @@ const applyChecklistEffects = async (opportunity, row, section, before, after, a
     const name = actor?.name ?? "Operations";
 
     if (section === "po" && turnedOn("poReleasedConfirmed")) {
-        const drafts = await PurchaseOrder.findAll({ where: { opportunityId: opportunity.id, status: "draft" } });
+        const all = await PurchaseOrder.findAll({ where: { opportunityId: opportunity.id, status: "draft" } });
+        // A draft flagged when the approvals were reopened stays held until it is marked reviewed.
+        const drafts = all.filter((po) => !po.reviewFlag);
+        const held = all.filter((po) => po.reviewFlag);
         const sentAt = parseDate(after.poReleasedOn, "poReleasedOn") ?? new Date();
         for (const po of drafts) await po.update({ status: "sent", sentAt });
         await recordSystemEvent(
             opportunity,
-            drafts.length ? `Purchase orders sent — ${drafts.map((po) => po.ref).join(", ")} (released on CL-13)` : "PO released to supplier — recorded on CL-13",
+            `${drafts.length ? `Purchase orders sent — ${drafts.map((po) => po.ref).join(", ")} (released on CL-13)` : "PO released to supplier — recorded on CL-13"}${held.length ? ` — held for review: ${held.map((po) => po.ref).join(", ")}` : ""}`,
             actor
         );
     }

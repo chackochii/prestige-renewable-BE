@@ -60,18 +60,19 @@ export default (sequelize, DataTypes) => {
             // and stage 5 tracks only those. The keys dnsp, da and finance carry the
             // coordinator's checklists on the approvals screen; any other key is a
             // plain approval to record. Empty array = this unit has no approvals.
+            // Electrical safety (CES) is no longer one: every job needs it at
+            // installation & handover (approvalsService.HANDOVER_ONLY_TYPES).
             approvalTypes: {
                 type: DataTypes.JSONB,
                 allowNull: false,
                 defaultValue: [
-                    { key: "dnsp", label: "DNSP / network connection approval" },
-                    { key: "da", label: "Council DA / development consent" },
-                    { key: "finance", label: "Finance approval" },
-                    { key: "strata", label: "Strata / body corporate approval" },
-                    { key: "heritage", label: "Heritage overlay approval" },
-                    { key: "landlord", label: "Landlord consent" },
-                    { key: "electrical_safety", label: "Electrical safety / CES notification" },
-                    { key: "rebate", label: "Rebate pre-approval" },
+                    { key: "dnsp", label: "Network Connection Approval (DNSP)" },
+                    { key: "da", label: "Council Approval (DA)" },
+                    { key: "finance", label: "Finance Approval" },
+                    { key: "strata", label: "Strata Approval" },
+                    { key: "heritage", label: "Heritage Approval" },
+                    { key: "landlord", label: "Landlord Consent" },
+                    { key: "rebate", label: "Rebate Pre-Approval" },
                 ],
             },
             // Free-form per-unit data: industry-specific fields, branding,

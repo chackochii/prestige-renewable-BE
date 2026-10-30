@@ -277,6 +277,17 @@ export default (sequelize, DataTypes) => {
             // only: [{ key, label }]. Their keys can be in requiredApprovals
             // like any catalogue key (approvalsService.jobCatalogueFor).
             customApprovalTypes: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+            // The way out of approvals and back (approvalsService, UAT exit
+            // logic Oct 2026). Each is null when it does not apply.
+            approvalHold: { type: DataTypes.JSONB }, // { reason, by, byId, at } — On Hold, cannot be sent
+            approvalSent: { type: DataTypes.JSONB }, // { at, by, byId, conditionsReviewed } — the last Send to Procurement
+            approvalReopened: { type: DataTypes.JSONB }, // { at, by, byId, reason, fromStage } — the last Reopen Approvals
+            approvalReview: { type: DataTypes.JSONB }, // { at, reason, lines } — Approval Review Needed
+            // { to: estimation | sales, approval, approvalKey, reason, by, byId, at, changes, resets, resetKeys }
+            // while the job is back with estimation or sales from a rejected approval.
+            approvalReturn: { type: DataTypes.JSONB },
+            // Why a job closed as lost from a rejected approval (approval_refused | customer_withdrew | other).
+            lostReason: { type: DataTypes.STRING(40) },
 
             // ---- Re-quote (stage 3 → 2) ----------------------------------------
             // Set while a requote_requests row is open — the customer asked for

@@ -14,9 +14,9 @@ import { userHasPermission } from "../../role/service/roleService.js";
 import { assignedUserIds, customerLabel } from "./opportunityPeople.js";
 import { sanitizeEstimationInput } from "./estimationInput.js";
 import { SERVICE_REQUIREMENTS, serviceRequirementKeys } from "../model/opportunity.js";
-// approvalsService imports moveToNextStage from here in turn (the last
-// approval moves the job on); both only call each other at request time.
-import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, installedSystemSummary, sanitizeRequiredApprovals } from "./approvalsService.js";
+// approvalsService imports moveToNextStage from here in turn (Send to
+// Procurement moves the job on); both only call each other at request time.
+import { APPROVALS_STAGE, assertApprovalKeys, enterApprovals, installedSystemSummary, sanitizeRequiredApprovals, sendToProcurement } from "./approvalsService.js";
 import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteService.js";
 import { advancePermissionFor, isStageNumber, LAST_STAGE, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 import { pagingOf } from "../../../utils/pagination.js";
@@ -593,6 +593,13 @@ export const advanceStage = async (id, actor, message = {}) => {
         throw httpError(400, "Only active records can advance");
     if (opportunity.stage >= LAST_STAGE) throw httpError(400, "Already at the final stage");
 
+    // Leaving approvals is Send to Procurement: its own who-may (the unit's
+    // send roles, else approvals.update), its own gate — every approval that
+    // applies complete, not on hold, no review outstanding, conditions
+    // reviewed ({ conditionsReviewed }) — and procurement is told. See
+    // approvalsService.sendToProcurement.
+    if (opportunity.stage === APPROVALS_STAGE) return sendToProcurement(opportunity, actor, { conditionsReviewed: message.conditionsReviewed === true });
+
     // Leaving a stage belongs to the department that owns it, so the check is
     // against the record's current stage rather than one blanket permission —
     // see stageAccess.js. The route lets through anyone holding any of the
@@ -628,19 +635,6 @@ export const advanceStage = async (id, actor, message = {}) => {
     if (opportunity.stage === 3) {
         const accepted = await db.Proposal.count({ where: { opportunityId: opportunity.id, status: "accepted" } });
         if (!accepted) throw httpError(400, "The customer has not accepted a proposal yet");
-    }
-
-    // Leaving approvals needs every required approval approved — one marked
-    // not applicable is not waited on (the last one normally moves the job on
-    // by itself — see approvalsService). A job that needed none, or whose
-    // last one was marked not applicable, is moved by hand from here.
-    if (opportunity.stage === APPROVALS_STAGE) {
-        const waiting = await db.Approval.findAll({
-            where: { opportunityId: opportunity.id, required: true, status: { [Op.notIn]: ["approved", "not_applicable"] } },
-            attributes: ["label"],
-            order: [["id", "ASC"]],
-        });
-        if (waiting.length) throw httpError(400, `Waiting on approvals: ${waiting.map((row) => row.label).join(", ")}`);
     }
 
     // Leaving procurement needs the purchase order released (CL-13); leaving

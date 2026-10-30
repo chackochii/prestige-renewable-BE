@@ -34,6 +34,9 @@ export default (sequelize, DataTypes) => {
             // enforced via approvalPolicy.assertNotPurchaseOrderSelfApproval.
             approvedById: { type: DataTypes.INTEGER, allowNull: true },
             approvedAt: { type: DataTypes.DATE },
+            // { reason, at, by } — raised before the job's approvals were
+            // reopened: held (not sent) until someone marks it reviewed.
+            reviewFlag: { type: DataTypes.JSONB },
         },
         { tableName: "purchase_orders" }
     );

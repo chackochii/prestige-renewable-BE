@@ -47,7 +47,12 @@ export const NOTIFICATION_EVENTS = {
     "approvals.started": { label: "Job entered approvals — approvals to lodge", priority: "high" },
     "approvals.finance_required": { label: "Finance application to initiate", priority: "high" },
     "approvals.rejected": { label: "An approval was not given — back with sales", priority: "high" },
-    "approvals.complete": { label: "All approvals received — start procurement", priority: "high" },
+    // Raised twice on the way out: every approval complete (the coordinator and
+    // owners: ready to send), then Send to Procurement (procurement: start).
+    "approvals.complete": { label: "All approvals complete — send to / start procurement", priority: "high" },
+    "approvals.returned": { label: "Job sent back from approvals to estimation or sales", priority: "high" },
+    "approvals.reopened": { label: "Approvals reopened — purchase orders to review", priority: "high" },
+    "approvals.review_needed": { label: "Approval revoked or expired after the job moved on", priority: "high" },
 
     // Procurement & delivery, stage 6 (modules/opportunity/service/procurementService).
     "procurement.started": { label: "Job entered procurement — BOQ to verify", priority: "high" },

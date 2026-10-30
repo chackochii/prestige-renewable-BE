@@ -108,10 +108,41 @@ const validateMarginFloor = (value) => {
     return floor;
 };
 
-// Free-form per-unit data; any JSON object is accepted
+// The approval limits Unit settings edits (prestige-fe constants/approvals.js APPROVAL_TIMER_DEFAULTS).
+const APPROVAL_TIMER_KEYS = ["staleLodgedDays", "idleDays", "expiryWarningDays"];
+const ROLE_CODE_RE = /^[A-Z][A-Z0-9_]{1,19}$/;
+
+// Per-unit data. Any JSON object is accepted; the keys the approvals stage
+// reads are checked: approvalAccess { sendRoles, reopenRoles } (role codes —
+// who may send a job to Procurement and reopen its approvals), approvalTimers
+// (whole days) and rebateOptions ([{ key, label }], keys up to 30 characters).
 const validateMetadata = (value) => {
     if (!isPlainObject(value)) throw httpError(400, "metadata must be an object");
-    return value;
+    const metadata = { ...value };
+    if (metadata.approvalAccess !== undefined) {
+        if (!isPlainObject(metadata.approvalAccess)) throw httpError(400, "metadata.approvalAccess must be { sendRoles, reopenRoles }");
+        const access = {};
+        for (const key of ["sendRoles", "reopenRoles"]) {
+            const codes = metadata.approvalAccess[key] ?? [];
+            if (!Array.isArray(codes) || codes.some((code) => typeof code !== "string" || !ROLE_CODE_RE.test(code)))
+                throw httpError(400, `metadata.approvalAccess.${key} must be a list of role codes`);
+            access[key] = [...new Set(codes)];
+        }
+        metadata.approvalAccess = access;
+    }
+    if (metadata.approvalTimers !== undefined) {
+        if (!isPlainObject(metadata.approvalTimers)) throw httpError(400, "metadata.approvalTimers must be an object of days");
+        const timers = {};
+        for (const key of APPROVAL_TIMER_KEYS) {
+            if (metadata.approvalTimers[key] === undefined || metadata.approvalTimers[key] === null || metadata.approvalTimers[key] === "") continue;
+            const days = Number(metadata.approvalTimers[key]);
+            if (!Number.isInteger(days) || days < 1 || days > 365) throw httpError(400, `metadata.approvalTimers.${key} must be a whole number of days between 1 and 365`);
+            timers[key] = days;
+        }
+        metadata.approvalTimers = timers;
+    }
+    if (metadata.rebateOptions !== undefined) metadata.rebateOptions = validateKeyLabelList(metadata.rebateOptions, "metadata.rebateOptions", 30);
+    return metadata;
 };
 
 // How loudly this unit wants each notification event: { "<event key>": "high" }.

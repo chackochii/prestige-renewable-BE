@@ -54,6 +54,8 @@ export const ATTACHMENT_CATEGORIES = {
     bill: "energy_bill",
     document: "lead",
     client_document: "evidence", // what the client sends over during estimation
+    // Approvals: the evidence on an approval, and documents added to one once the job has moved on.
+    approval: "approval",
     // Procurement & delivery: what the checklists attach (CL-12 quotes, CL-13 PO records, CL-14 receipts and photos).
     supplier_quote: "supplier_quote",
     purchase_order: "other",
@@ -69,6 +71,7 @@ const CATEGORY_BY_TYPE = {
     lead: "document",
     evidence: "client_document",
     supplier_quote: "supplier_quote",
+    approval: "approval",
 };
 
 const formatSize = (bytes) => {
