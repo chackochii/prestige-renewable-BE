@@ -522,7 +522,8 @@ const presentPublic = async (proposal, opportunity) => {
         expiresAt: proposal.expiresAt,
         grandTotal: proposal.grandTotal === null ? null : Number(proposal.grandTotal),
         customerName: customerFirstName(opportunity),
-        business: { name: unit?.name ?? null, legalName: unit?.legalName ?? null },
+        // Who is sending it — and whose logo the page and its PDF carry (brand).
+        business: { code: unit?.code ?? null, name: unit?.name ?? null, legalName: unit?.legalName ?? null, brand: unit?.brand ?? null },
         contact: proposal.sentBy ? { name: proposal.sentBy.name, email: proposal.sentBy.email, phone: proposal.sentBy.phone ?? null } : null,
         message: proposal.emailMessage,
         quoteVersion: proposal.quoteVersion

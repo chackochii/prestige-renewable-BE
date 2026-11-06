@@ -195,8 +195,15 @@ const photosOf = (request) =>
 
 /** The public view with the job details the inspection form heads itself with. */
 const presentPublic = async (visit, request, photos) => {
-    const quote = request.opportunity ? await Quote.findOne({ where: { opportunityId: request.opportunity.id }, attributes: ["quoteNumber"] }) : null;
-    return presentPublicTask(visit, request, request.opportunity, photos, { quoteNumber: quote?.quoteNumber ?? null, sitePhotosKey: SITE_PHOTOS_KEY });
+    const [quote, unit] = await Promise.all([
+        request.opportunity ? Quote.findOne({ where: { opportunityId: request.opportunity.id }, attributes: ["quoteNumber"] }) : null,
+        BusinessUnit.findByPk(request.businessUnitId, { attributes: ["brand"] }),
+    ]);
+    return presentPublicTask(visit, request, request.opportunity, photos, {
+        quoteNumber: quote?.quoteNumber ?? null,
+        sitePhotosKey: SITE_PHOTOS_KEY,
+        brand: unit?.brand ?? null,
+    });
 };
 
 /**

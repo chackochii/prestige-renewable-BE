@@ -28,7 +28,7 @@ router.get("/", getAll);
 // granted to other roles through the permission editor.
 router.post("/", requireSuperAdmin, create);
 router.get("/:id", getOne);
-router.patch("/:id", requireSuperAdmin, update); // { name?, legalName?, timezone?, status? }
+router.patch("/:id", requireSuperAdmin, update); // { name?, legalName?, timezone?, status?, brand? }
 router.delete("/:id", requireSuperAdmin, remove); // only units with no opportunities
 // Master config: billingSplit, commissionTiers, approvalTypes,
 // siteWorkSubstages, enabledStages, slaDays, marginFloor, metadata.

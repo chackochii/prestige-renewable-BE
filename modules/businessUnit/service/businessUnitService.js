@@ -8,6 +8,7 @@ import { SUPER_ROLE_CODE } from "../../role/service/roleService.js";
 import { PRIORITIES, isEventKey, isPriority } from "../../notification/service/notificationEvents.js";
 import { parseId } from "../../../utils/ids.js";
 import { isStageNumber, LAST_STAGE } from "../../opportunity/service/stageAccess.js";
+import { UNIT_BRANDS } from "../model/businessUnit.js";
 
 const { BusinessUnit, UserBusinessUnit, Opportunity } = db;
 
@@ -19,6 +20,13 @@ const COMMISSION_TIER_KEYS = ["lead_only", "lead_sales_support", "lead_full_sale
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+// Which company the unit trades as (businessUnit.UNIT_BRANDS): the logo the
+// frontend shows for it everywhere, so only a known value is stored.
+const validateBrand = (value) => {
+    if (!UNIT_BRANDS.includes(value)) throw httpError(400, `brand must be one of: ${UNIT_BRANDS.join(", ")}`);
+    return value;
+};
 
 const validateBillingSplit = (value) => {
     if (!Array.isArray(value) || value.length === 0)
@@ -225,6 +233,7 @@ export const createBusinessUnit = async (payload) => {
         legalName: payload.legalName,
         timezone: payload.timezone,
         status: payload.status,
+        ...(payload.brand !== undefined ? { brand: validateBrand(payload.brand) } : {}),
         ...validateConfig(payload), // omitted fields fall back to model defaults (full solar workflow)
     });
 };
@@ -253,8 +262,9 @@ export const updateBusinessUnit = async (id, payload = {}) => {
             throw httpError(400, `status must be one of: ${UNIT_STATUSES.join(", ")}`);
         updates.status = payload.status;
     }
+    if (payload.brand !== undefined) updates.brand = validateBrand(payload.brand);
     if (Object.keys(updates).length === 0)
-        throw httpError(400, "No fields provided. Editable: name, legalName, timezone, status");
+        throw httpError(400, "No fields provided. Editable: name, legalName, timezone, status, brand");
 
     return unit.update(updates);
 };

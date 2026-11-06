@@ -1,3 +1,9 @@
+/**
+ * Which company a unit trades as — the logo it shows on screen, on the public
+ * links and in the PDFs (prestige-fe helpers/brand.js keeps the files).
+ */
+export const UNIT_BRANDS = ["prestige", "sydpro"];
+
 export default (sequelize, DataTypes) => {
     const BusinessUnit = sequelize.define(
         "BusinessUnit",
@@ -6,6 +12,9 @@ export default (sequelize, DataTypes) => {
             code: { type: DataTypes.STRING(10), allowNull: false, unique: true }, // PRS, PCC, PCI, IP
             name: { type: DataTypes.STRING, allowNull: false },
             legalName: { type: DataTypes.STRING },
+            // prestige (Prestige Renewable Solutions) | sydpro (Sydpro Electrical):
+            // whose logo the unit shows. Superadmin sets it beside the name.
+            brand: { type: DataTypes.STRING(20), allowNull: false, defaultValue: "prestige", validate: { isIn: [UNIT_BRANDS] } },
             status: {
                 type: DataTypes.STRING(20),
                 allowNull: false,

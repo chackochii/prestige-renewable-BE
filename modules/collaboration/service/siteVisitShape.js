@@ -269,11 +269,11 @@ const customerNameOf = (opportunity) => {
 /**
  * Everything an unauthenticated holder of the link is shown: what they were
  * asked to do and where, the job details the inspection form (CL-04) heads
- * itself with — customer name, job and quote number, who was assigned — and
+ * itself with — customer name, job and quote number, the unit's brand, who was assigned — and
  * what they have uploaded so far. Never the customer's contact details, other
  * job data, or the answers once sent.
  */
-export const presentPublicTask = (visit, request, opportunity, photos = [], { quoteNumber = null, sitePhotosKey = null } = {}) => ({
+export const presentPublicTask = (visit, request, opportunity, photos = [], { quoteNumber = null, sitePhotosKey = null, brand = null } = {}) => ({
     status: visit.status,
     submittedAt: visit.submittedAt ?? null,
     title: request.title,
@@ -282,6 +282,9 @@ export const presentPublicTask = (visit, request, opportunity, photos = [], { qu
     customerName: customerNameOf(opportunity),
     jobNumber: opportunity?.number ?? null,
     quoteNumber,
+    // Which company the job belongs to (business_units.brand) — the logo the
+    // form heads itself with. Not the unit's name: the job number already says.
+    brand,
     scheduledFor: request.scheduledFor ?? null,
     assigneeName: visit.assigneeName ?? null,
     // The crew member came from the directory or with contact details, so the

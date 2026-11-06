@@ -15,6 +15,8 @@ export const NOTIFICATION_EVENTS = {
     "lifecycle.changed": { label: "Record marked won, lost or closed", priority: "medium" },
     "sla.overdue": { label: "SLA overdue", priority: "high" },
     "lead.captured": { label: "New lead captured", priority: "medium" },
+    // An ad-platform lead landed in the inbox (modules/lead/service/inboundLeadService).
+    "lead.inbound": { label: "New ad lead waiting in the inbox", priority: "medium" },
     "estimation.on_hold": { label: "Estimation sent back to sales", priority: "high" },
     "estimation.site_visit": { label: "Pre-site inspection needed", priority: "medium" },
     "lead.changed": { label: "Lead details changed after handover", priority: "high" },

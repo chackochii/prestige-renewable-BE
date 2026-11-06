@@ -5,8 +5,10 @@
 //
 // There is deliberately no public route that lists business units: visitors
 // never choose one, so the unit names are not exposed to anonymous callers.
+// (/leads/brand says which of the two logos a link's page shows, for the unit
+// that link already names — not the unit's name, and never a list.)
 import { Router } from "express";
-import { createFromPublicForm } from "../modules/opportunity/controller/publicLeadController.js";
+import { createFromPublicForm, getPublicFormBrand } from "../modules/opportunity/controller/publicLeadController.js";
 import * as siteVisit from "../modules/collaboration/controller/publicSiteVisitController.js";
 import * as proposal from "../modules/opportunity/controller/proposalController.js";
 import rateLimit from "../middleware/rateLimit.js";
@@ -33,6 +35,10 @@ router.post(
     rateLimit({ name: "public-lead", windowMs: 15 * 60 * 1000, max: 10 }),
     createFromPublicForm
 ); // { name, email, phone, siteLine1?, siteSuburb?, siteState?, sitePostcode?, message?, businessUnit? } → { number, businessUnit }
+
+// Which logo the enquiry page shows for its link: the brand of the unit the
+// lead would land in, resolved as a submission is. Read once per page load.
+router.get("/leads/brand", rateLimit({ name: "public-lead-brand", windowMs: 15 * 60 * 1000, max: 60 }), getPublicFormBrand); // ?unit=PRS → { businessUnit, brand }
 
 // ---- Site-visit form --------------------------------------------------------
 // The link a coordinator hands to whoever attends a visit. The token in the

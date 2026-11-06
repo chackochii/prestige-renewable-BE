@@ -53,6 +53,11 @@ export default (sequelize, DataTypes) => {
             // Same email/phone as an earlier lead — kept, flagged, reviewable.
             duplicateOfId: { type: DataTypes.INTEGER, allowNull: true },
 
+            // A Meta lead arrives as an id only; its answers are fetched from
+            // the Graph API. When that fetch fails the lead is kept as a stub
+            // with the reason here, and "refresh" tries again.
+            fetchError: { type: DataTypes.TEXT },
+
             // Review outcome
             opportunityId: { type: DataTypes.INTEGER, allowNull: true }, // set on convert
             reviewedById: { type: DataTypes.INTEGER, allowNull: true },

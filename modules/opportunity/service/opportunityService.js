@@ -474,7 +474,10 @@ const assertQualificationConsistent = (fields) => {
  * returns a record nothing is created, and the error thrown carries that
  * record as `duplicate` (the public form answers with its number).
  */
-export const createLead = async (payload = {}, actor, { findDuplicate = null } = {}) => {
+// `inbound` = { id, source }: the inbound_leads row being converted (modules/
+// lead/service/inboundLeadService). The source is then the platform — one of
+// the automated values nobody can pick by hand — and the record points back.
+export const createLead = async (payload = {}, actor, { findDuplicate = null, inbound = null } = {}) => {
     const unit = await BusinessUnit.findByPk(parseId(payload.businessUnitId, "business unit id"));
     if (!unit) throw httpError(404, "Business unit not found");
 
@@ -484,8 +487,15 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null } =
     fields.qualification = fields.qualification ?? "nurture";
     if (fields.qualification === "qualified") await assertCanQualify(fields, { isNew: true });
     assertQualificationConsistent(fields);
-    fields.leadSource = fields.leadSource ?? "inbound";
-    await normalizeSource(fields);
+    if (inbound) {
+        fields.leadSource = inbound.source;
+        fields.referrerId = null;
+        fields.referrerName = null;
+        fields.involvementTier = null;
+    } else {
+        fields.leadSource = fields.leadSource ?? "inbound";
+        await normalizeSource(fields);
+    }
     fields.estimatorId = await assertUserExists(fields.estimatorId, "estimator");
     fields.salespersonId = await assertUserExists(fields.salespersonId, "salesperson");
 
@@ -505,6 +515,7 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null } =
                 stage: 1,
                 lifecycle: "Active",
                 marginFloor: unit.marginFloor,
+                inboundLeadId: inbound?.id ?? null,
                 leadOwnerId: actor?.id ?? null,
                 slaStartedAt: now,
                 slaDueAt: new Date(now.getTime() + slaDays * 86400000),

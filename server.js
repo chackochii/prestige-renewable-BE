@@ -2,6 +2,7 @@ import "dotenv/config";
 import app from "./app.js";
 import { connectDB, sequelize } from "./config/db.js";
 import { startSlaWatcher } from "./modules/notification/service/slaWatcher.js";
+import { startLeadSyncWatcher } from "./modules/lead/service/leadSyncWatcher.js";
 import { closeAllStreams, startStreamBus, stopStreamBus } from "./modules/notification/service/notificationStream.js";
 import logger from "./utils/logger.js";
 
@@ -15,6 +16,7 @@ const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS) || 10000;
 
 let server;
 let stopSlaWatcher = () => {};
+let stopLeadSync = () => {};
 let shuttingDown = false;
 
 // Stops taking new connections, lets running requests finish, ends the
@@ -33,6 +35,7 @@ const shutdown = async (reason, exitCode = 0) => {
 
     try {
         stopSlaWatcher();
+        stopLeadSync();
         await stopStreamBus();
         if (server) {
             const closed = new Promise((resolve) => server.close(resolve));
@@ -78,6 +81,8 @@ const start = async () => {
     startStreamBus();
     // Raises the "past SLA" notifications; see SLA_CHECK_INTERVAL_MINUTES.
     stopSlaWatcher = startSlaWatcher();
+    // Polls Meta for leads the webhook missed; see LEAD_SYNC_INTERVAL_MINUTES.
+    stopLeadSync = startLeadSyncWatcher();
 };
 
 start().catch((err) => {

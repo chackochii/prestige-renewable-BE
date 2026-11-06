@@ -53,6 +53,13 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@xml
 # Notifications — how often to check for records past their SLA (0 disables)
 # SLA_CHECK_INTERVAL_MINUTES=1440
 
+# Automated lead capture (Meta / Google Ads webhooks) — see "Automated lead capture"
+# META_APP_SECRET=                 # Meta app → Settings → Basic → App secret; signs every delivery
+# META_WEBHOOK_VERIFY_TOKEN=       # any string you choose; typed into the Meta webhook subscription
+# META_GRAPH_VERSION=v26.0
+# INTEGRATION_SECRET_KEY=          # 64 hex chars (openssl rand -hex 32); seals Page tokens at rest
+# LEAD_SYNC_INTERVAL_MINUTES=60    # Meta poll as a safety net for missed webhooks (0 disables)
+
 # Uploaded documents — DigitalOcean Spaces (required; the server won't start without them)
 DO_SPACES_ENDPOINT=https://syd1.digitaloceanspaces.com
 DO_SPACES_BUCKET=prestige-documents-a
@@ -75,6 +82,11 @@ DO_SPACES_SECRET=
 | `SEED_SUPERADMIN_EMAIL` | no | Email of the seeded superadmin (default `superadmin@prestige.group`) |
 | `SEED_SUPERADMIN_PASSWORD` | no | Password of the seeded superadmin, stored bcrypt-hashed (default `ChangeMe@123`) |
 | `PUBLIC_LEAD_UNIT_CODE` | no | Business unit the public enquiry form files into when the request has no `businessUnit`; otherwise the first unit by code |
+| `META_APP_SECRET` | for Meta | Signs Meta webhook deliveries (`X-Hub-Signature-256`); without it `POST /api/webhooks/meta` answers 503 |
+| `META_WEBHOOK_VERIFY_TOKEN` | for Meta | The verify token of the Meta webhook subscription; without it the handshake answers 503 |
+| `META_GRAPH_VERSION` | no | Graph API version for lead fetches (default `v26.0`, what Meta's lead-ads docs use as of Nov 2026) |
+| `INTEGRATION_SECRET_KEY` | recommended | 32-byte key (hex or base64) that encrypts Page access tokens in `integration_connections.credentials`; unset = stored in clear, warned once |
+| `LEAD_SYNC_INTERVAL_MINUTES` | no | How often every active Meta connection is polled for leads the webhook missed (default 60; 0 disables) |
 | `SLA_CHECK_INTERVAL_MINUTES` | no (default 1440 — once a day) | How often to look for records past their stage SLA and notify whoever is assigned; `0` turns the check off |
 | `LOG_TO_FILES` | no (default on) | `false` stops writing `logs/*.log` — use it when the platform collects stdout. Production always logs JSON to stdout |
 | `LOG_DIR`, `LOG_MAX_SIZE_MB`, `LOG_MAX_FILES`, `LOG_LEVEL` | no (`logs`, 10, 5, `info`) | Log folder, size at which a file rotates, how many rotated files are kept, minimum level. Never ship the log folder — it holds real request data |
@@ -254,7 +266,7 @@ Notes:
 
 ## Proposal (stage 3) & re-quotes
 
-Sales sends the customer a link to a saved quote version (`POST /:id/proposals`); the server sends no email — the rep sends it from their own email app. The customer accepts (the job moves on to Approvals), asks for changes, or declines through `/api/public/proposals/:token`. Sales work needs `leads.update`; reads accept `leads.read` or `estimation.read`. See `modules/opportunity/service/proposalService.js`.
+Sales sends the customer a link to a saved quote version (`POST /:id/proposals`); the server sends no email — the rep sends it from their own email app. The customer accepts (the job moves on to Approvals), asks for changes, or declines through `/api/public/proposals/:token`, whose payload names the business sending it (`business: { code, name, legalName, brand }`) so the page and its PDF carry the unit's logo. Sales work needs `leads.update`; reads accept `leads.read` or `estimation.read`. See `modules/opportunity/service/proposalService.js`.
 
 **When the customer wants changes** the job goes back to the estimator for a re-quote (`requoteService.js`, table `requote_requests`, one row per round):
 
@@ -376,6 +388,10 @@ await notify({
 | `GET` | `/api/notifications/stream?token=…` | SSE: `ready` (with the unread count) then a `notification` event per notice |
 
 No permission gates these — the service scopes every query to the caller, who only ever sees their own.
+## Business unit branding
+
+Each unit trades as one of two companies, and `business_units.brand` says which: `prestige` (Prestige Renewable Solutions, the default) or `sydpro` (Sydpro Electrical). The frontend keeps the logo files and picks them by this value (`prestige-fe/src/helpers/brand.js`): on the sidebar and in the quote and BOQ PDFs from the units list, on the proposal page from `business.brand`, on the site-visit form from the task's `brand`, and on the enquiry page from `GET /api/public/leads/brand`. Only the superadmin changes it (`PATCH /api/business-units/:id` with `brand`, beside the name, legal name, timezone and status; `POST` takes it too). Migration `20261106000001` adds the column and marks units coded or named Sydpro.
+
 ## Public enquiry form (no token)
 
 The website enquiry form (`/enquiry` in prestige-fe) talks to one unauthenticated route.
@@ -383,6 +399,7 @@ The website enquiry form (`/enquiry` in prestige-fe) talks to one unauthenticate
 | Method | Route | Body → returns |
 |---|---|---|
 | `POST` | `/api/public/leads` | `{ name, email, phone }` required; `siteLine1?, siteSuburb?, siteState?, sitePostcode?, message?, businessUnit? (code)` → `{ number, businessUnit }` |
+| `GET` | `/api/public/leads/brand` | `?unit=PRS` (the code on the link, optional) → `{ businessUnit, brand }` — whose logo the page shows. Resolved exactly as a submission is (below), so a bare link answers for the default unit and a stale code gets the same 400 |
 
 A successful submission is a normal stage-1 lead (`leadSource: inbound`, `leadSourceDetails: "Website enquiry form"`, message stored in `notes`, no lead owner) and the unit's Business Owners get the same in-app notification as `notify-owner`.
 
@@ -425,6 +442,44 @@ Validation lives in `modules/opportunity/service/publicLeadService.js` and runs 
 Only these fields are accepted. Everything else in the body is ignored, so a caller cannot set `qualification`, `businessUnitId`, assignments or any other server-managed field. The response deliberately carries only the lead number and unit code, never the record.
 
 **Behind a reverse proxy**, set `app.set("trust proxy", 1)` in `app.js` so the limiter keys on the real client IP rather than the proxy's. The limiter is per process: with several nodes, put a shared limiter in front.
+
+## Automated lead capture (Meta & Google Ads)
+
+Leads from Facebook/Instagram lead ads and Google Ads lead forms arrive on their own and wait in the **lead inbox** (`/leads/inbox` in prestige-fe) until sales converts or rejects them. Code: `modules/lead/` (models from migration `20260827000001`, the webhook layer from `20261103000001`).
+
+**Connections** (`integration_connections`, Administration → Lead connections, `admin.*`) tie one ad account to ONE business unit — leads inherit it. Meta: `externalAccountId` is the Facebook Page id and `credentials.pageAccessToken` a Page token (sealed with `INTEGRATION_SECRET_KEY`, returned only as `••••1234`). Google: the API makes a 48-character `webhookSecret`, which is the key the admin pastes into the lead form asset. `config.fieldMap` steers how a form's questions land on the lead (`{ "which_suburb": "suburb" }`; columns: name, firstName, lastName, email, phone, company, street, suburb, state, postcode, message, ignore); `autoConvert` skips the inbox.
+
+| Method | Route | Auth | Notes |
+|---|---|---|---|
+| `GET` | `/api/webhooks/meta` | Meta verify token | Subscription handshake: answers `hub.challenge` when `hub.verify_token` = `META_WEBHOOK_VERIFY_TOKEN` |
+| `POST` | `/api/webhooks/meta` | `X-Hub-Signature-256` over the raw body with `META_APP_SECRET` | `{ object: "page", entry: [{ changes: [{ field: "leadgen", value: { leadgen_id, page_id, form_id, … } }] }] }`. The page id finds the active Meta connection; the answers are fetched from the Graph API with its token. A fetch failure (expired token) still files the lead as a **stub** with `fetchError`, answered 200 so Meta does not retry; "refresh" fetches again. Unknown pages are logged and acknowledged |
+| `POST` | `/api/webhooks/google-ads` | `google_key` in the body | The whole lead: `{ lead_id, google_key, user_column_data: [{ column_id, column_name, string_value }], campaign_id, adgroup_id, creative_id, form_id, is_test }`. The key finds the connection (403 if none, or switched off); `is_test` leads are filed and flagged |
+| `GET` | `/api/inbound-leads` | `leads.read` | `?businessUnitId=&status=pending\|converted\|rejected&source=&search=&page=&pageSize=` → rows + `counts` per status, newest first |
+| `GET` | `/api/inbound-leads/:id` | `leads.read` | the lead with its answers (`extras`, raw `payload`) and `matches`: opportunities in the unit already holding its email/phone |
+| `POST` | `/api/inbound-leads/:id/convert` | `leads.create` | `{ overrides?: { …lead fields } }` → `{ lead, opportunity }`: a stage-1 opportunity via `createLead` with `leadSource` = the platform, `inboundLeadId` set, `leadSourceDetails` "Meta Ads · campaign · form", the message in `notes`; a system history entry and the business-owner notification follow. 409 when already converted |
+| `POST` | `/api/inbound-leads/:id/reject` | `leads.update` | `{ reason? }`; 409 for a converted lead |
+| `POST` | `/api/inbound-leads/:id/reopen` | `leads.update` | rejected → pending |
+| `POST` | `/api/inbound-leads/:id/refresh` | `leads.update` | Meta only: fetch the answers again |
+| `GET` | `/api/integrations/setup` | `admin.read` | `{ webhookUrls, meta: { appSecretSet, verifyToken, tokensSealed } }` |
+| `GET` / `POST` | `/api/integrations/connections` | `admin.read` / `admin.create` | `?businessUnitId=` → `[connection]` (with `leadCount`) · `{ businessUnitId, platform: meta_ads\|google_ads, name, externalAccountId?, credentials?: { pageAccessToken }, config?: { fieldMap }, autoConvert?, isActive? }` |
+| `GET` / `PATCH` / `DELETE` | `/api/integrations/connections/:id` | `admin.read` / `admin.update` / `admin.delete` | PATCH takes any field above; a blank token keeps the stored one. Deleting keeps the leads (`connection_id` → null) |
+| `POST` | `/api/integrations/connections/:id/rotate-secret` | `admin.update` | Google: a new key, the old one stops at once |
+| `POST` | `/api/integrations/connections/:id/test` | `admin.update` | Meta: `{ ok, page, forms, subscription }` — reads the page and forms with the stored token and subscribes the page to the leadgen webhook · Google: `{ ok, webhookUrl, hint }` |
+| `POST` | `/api/integrations/connections/:id/sync` | `admin.update` | Meta: pulls every form's leads since the last poll (30 days on the first run) → `{ forms, fetched, created, converted }` |
+
+Rules that apply to every lead, whichever way it came in (`inboundLeadService.ingestLead`):
+
+- **Idempotent**: `(source, external_lead_id)` is unique, so a re-delivered lead (Meta retries, the poll overlapping the webhook) is a no-op.
+- **Duplicates are kept and flagged**: a lead with the same email, or the same last nine phone digits, as an earlier inbox lead in the unit gets `duplicateOfId`; the reviewer decides.
+- **Nothing is lost**: the raw platform object stays in `payload.raw`; answers that map to no column ("What is your roof type?") are written into `message` as `Label: answer` lines and kept in `payload.normalized.extras`.
+- **Who hears**: the unit's Sales & Marketing Managers and Business Owners get `lead.inbound` (deduped per lead); conversion raises the usual `lead.captured`.
+- **Poll**: `LEAD_SYNC_INTERVAL_MINUTES` runs `syncConnection` for every active Meta connection (`leadSyncWatcher.js`); errors land on `integration_connections.last_error` and the connections screen.
+- **Unit scoping** is as for opportunities: lists name their unit (403 outside the caller's), `/:id` routes answer 404 outside it.
+
+Setting the platforms up:
+
+1. **Meta** — in the Meta app (Business type): add the *Webhooks* product, subscribe the **Page** object to the `leadgen` field with callback `https://<api>/api/webhooks/meta` and the verify token from `.env`; put the app secret in `META_APP_SECRET`. Make a System User in Business Manager with access to the Page, generate a token with `leads_retrieval`, `pages_show_list`, `pages_manage_metadata` (and `ads_read` if campaign names are wanted), and create the connection with the Page id and that token. Press **Test** on the connection: it checks the token against the page, lists the lead forms and subscribes the page to the app's `leadgen` webhook (`POST /{page_id}/subscribed_apps`, which needs `pages_manage_metadata`). Then use Meta's *Lead Ads Testing Tool* to send a test lead.
+2. **Google Ads** — on the lead form asset, open *Lead delivery option → Webhook integration*, paste the webhook URL and the connection's key, and press *Send test data*: the lead appears in the inbox marked **Test**.
 
 ## Estimation (stage 2) & quote builder API
 
@@ -473,6 +528,7 @@ prestige-be/
 │   └── db.js              # Sequelize instance + connectDB()
 ├── models/index.js        # Central model registry + associations
 ├── modules/<name>/model/  # One Sequelize model per table
+├── modules/lead/          # Lead inbox: webhooks, Meta Graph client, normaliser, connections, sync poll
 ├── migrations/*.cjs       # Schema migrations (ordered)
 └── seeders/*.cjs          # Superadmin seeder
 ```

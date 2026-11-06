@@ -29,6 +29,9 @@ const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 
 export const AU_STATES = ["NSW", "ACT", "VIC", "QLD", "SA", "WA", "TAS", "NT"];
 
+/** A link naming an unknown, malformed or inactive unit: the one thing the visitor is told. */
+const BAD_LINK = "This enquiry link is not valid. Please use the link you were given, or contact us directly.";
+
 // ---- Field rules -----------------------------------------------------------
 // Every field has a max length and an allowed-character pattern; the three
 // required ones also have a non-empty check. Letter classes are Unicode-aware
@@ -139,7 +142,7 @@ export const validatePublicLead = (body) => {
     // Comes from the link, not the form, so a bad value means a broken link.
     const businessUnit = clean(src.businessUnit).toUpperCase();
     if (businessUnit && !RULES.businessUnit.pattern.test(businessUnit))
-        fail("businessUnit", "This enquiry link is not valid. Please use the link you were given, or contact us directly.");
+        fail("businessUnit", BAD_LINK);
 
     return {
         errors,
@@ -156,15 +159,28 @@ const resolveUnit = async (code) => {
     const wanted = code || String(process.env.PUBLIC_LEAD_UNIT_CODE || "").trim().toUpperCase();
     if (wanted) {
         const unit = await BusinessUnit.findOne({ where: { code: wanted, status: ACCEPTING_STATUSES } });
-        if (!unit) {
-            const message = "This enquiry link is not valid. Please use the link you were given, or contact us directly.";
-            throw httpError(400, message, [{ field: "businessUnit", message }]);
-        }
+        if (!unit) throw httpError(400, BAD_LINK, [{ field: "businessUnit", message: BAD_LINK }]);
         return unit;
     }
     const unit = await BusinessUnit.findOne({ where: { status: ACCEPTING_STATUSES }, order: [["code", "ASC"]] });
     if (!unit) throw httpError(503, "No business unit is accepting enquiries yet.");
     return unit;
+};
+
+/**
+ * Which logo the enquiry page shows for its link. `code` is the `?unit=` on the
+ * link (optional) and is resolved exactly as a submission would be — the
+ * default unit for a bare link, the same 400 for an unknown, malformed or
+ * inactive code — so the page shows the brand of the unit the lead will land
+ * in. Nothing else about the unit: this is not a lookup of names.
+ * → { businessUnit, brand }
+ */
+export const publicLeadBrand = async (code) => {
+    const businessUnit = clean(code).toUpperCase();
+    if (businessUnit && !RULES.businessUnit.pattern.test(businessUnit))
+        throw httpError(400, BAD_LINK, [{ field: "businessUnit", message: BAD_LINK }]);
+    const unit = await resolveUnit(businessUnit);
+    return { businessUnit: unit.code, brand: unit.brand };
 };
 
 // The same person re-sending the form (double click, refresh, retry after a

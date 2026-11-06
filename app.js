@@ -44,6 +44,18 @@ app.use(cors());
 // the 100 kB default. Only that public route gets the larger allowance; the
 // general parser below then leaves an already-parsed body alone.
 app.use("/api/public/site-visits", express.json({ limit: "1mb" }));
+// Webhook deliveries keep their raw bytes (req.rawBody): Meta signs the body
+// as sent, and the signature has to be checked over exactly those bytes, not
+// over a re-serialised object (routes/webhookRoutes.js).
+app.use(
+    "/api/webhooks",
+    express.json({
+        limit: "1mb",
+        verify: (req, res, buf) => {
+            req.rawBody = buf;
+        },
+    })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 // The file and notification-stream routes carry a token in the query string;
