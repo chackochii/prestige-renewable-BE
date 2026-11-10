@@ -40,6 +40,8 @@ import {
     acknowledgeLeadChange,
 } from "../service/estimationService.js";
 import * as quotes from "../service/quoteService.js";
+import { suggestQuote, applySuggestion } from "../service/quoteAiService.js";
+import { readEnergyBill } from "../service/energyBillService.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse, errorResponse } from "../../../utils/apiResponse.js";
 
@@ -323,6 +325,29 @@ export const deleteQuoteCost = asyncHandler(async (req, res) => {
     await quotes.removeCost(req.params.id, req.params.costId);
 
     successResponse(res, { message: "Quote cost removed" });
+});
+
+// ---- AI-assisted quote -------------------------------------------------------
+
+/** A quote proposed by the language model from the job details — nothing is saved. */
+export const suggestAiQuote = asyncHandler(async (req, res) => {
+    const suggestion = await suggestQuote(req.params.id, req.body);
+
+    successResponse(res, { data: suggestion });
+});
+
+/** Reads an electricity bill on the job for a quote from it — the figures only, nothing saved. */
+export const readAiBill = asyncHandler(async (req, res) => {
+    const reading = await readEnergyBill(req.params.id, req.body);
+
+    successResponse(res, { data: reading });
+});
+
+/** Puts the lines the estimator kept from a suggestion into the draft. */
+export const applyAiQuote = asyncHandler(async (req, res) => {
+    const quote = await applySuggestion(req.params.id, req.body, req.user);
+
+    successResponse(res, { data: quote });
 });
 
 // ---- Lead checklist: the optional rows estimation inherits -------------------

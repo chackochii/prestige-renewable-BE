@@ -43,6 +43,9 @@ import {
     addQuoteCost,
     updateQuoteCost,
     deleteQuoteCost,
+    suggestAiQuote,
+    applyAiQuote,
+    readAiBill,
 } from "../modules/opportunity/controller/opportunityController.js";
 import * as collaboration from "../modules/collaboration/controller/collaborationController.js";
 import * as proposals from "../modules/opportunity/controller/proposalController.js";
@@ -220,5 +223,15 @@ router.delete("/:id/quote/items/:itemId", estimate, deleteQuoteItem);
 router.post("/:id/quote/costs", estimate, addQuoteCost); // { kind?, costType?, calcType, value, description } → cost
 router.patch("/:id/quote/costs/:costId", estimate, updateQuoteCost); // → cost
 router.delete("/:id/quote/costs/:costId", estimate, deleteQuoteCost);
+
+// AI-assisted quote (quoteAiService): the model proposes lines from the
+// catalog, the estimator reviews them, and what is kept goes into the draft.
+// Needs GEMINI_API_KEY in the environment — 503 with the reason until then.
+// A quote from an electricity bill: the bill is uploaded as an attachment
+// (category "bill"), read here (energyBillService), checked by the estimator,
+// and sent back with the suggest request as `bill`.
+router.post("/:id/quote/ai/bill", estimate, readAiBill); // { documentId } → { document, reading, model } — nothing saved
+router.post("/:id/quote/ai/suggest", estimate, suggestAiQuote); // { instructions?, bill? } → { project, projectType, summary, items, costs, assumptions, checks, dropped, model, energy? } — nothing saved
+router.post("/:id/quote/ai/apply", estimate, applyAiQuote); // { mode: replace | add, items: [{ itemKey, brand, quantity }], costs?, project?, projectType?, billDocumentId? } → quote
 
 export default router;

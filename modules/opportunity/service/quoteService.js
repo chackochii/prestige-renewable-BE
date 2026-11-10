@@ -42,7 +42,7 @@ const QUOTE_ORDER = [
     [{ model: QuoteCost, as: "additionalCosts" }, "id", "ASC"],
 ];
 
-const findQuote = (opportunityId) => Quote.findOne({ where: { opportunityId }, include: QUOTE_INCLUDE, order: QUOTE_ORDER });
+export const findQuote = (opportunityId) => Quote.findOne({ where: { opportunityId }, include: QUOTE_INCLUDE, order: QUOTE_ORDER });
 
 // ---- Presentation (DECIMAL columns arrive as strings) -----------------------
 
@@ -91,7 +91,7 @@ export const presentQuote = (quote, opportunity) => ({
 const isGenerated = (quote) => quote.status === "generated";
 
 /** Nothing on a generated quote changes — the version the customer gets is the record. */
-const assertEditable = (quote) => {
+export const assertEditable = (quote) => {
     if (!isGenerated(quote)) return;
     const version = quote.generatedVersion?.version;
     throw httpError(
@@ -129,7 +129,7 @@ export const createQuote = async (id, actor) => {
     return presentQuote(await findQuote(opportunity.id), opportunity);
 };
 
-const loadQuoteFor = async (id) => {
+export const loadQuoteFor = async (id) => {
     const opportunity = await loadOpportunity(id);
     if (!opportunity) throw httpError(404, "Opportunity not found");
     const quote = await findQuote(opportunity.id);
