@@ -78,6 +78,10 @@ export const presentQuote = (quote, opportunity) => ({
     quoteDate: quote.quoteDate || null,
     taxTreatment: quote.taxTreatment,
     gstRatePct: Number(quote.gstRatePct) || 0,
+    // Savings and payback: null = not estimated (helpers/savings.js on the client works out the rest).
+    annualSavings: num(quote.annualSavings),
+    currentAnnualBill: num(quote.currentAnnualBill),
+    savingsBasis: quote.savingsBasis || "",
     items: (quote.items || []).map(presentItem),
     additionalCosts: (quote.additionalCosts || []).map(presentCost),
     // draft | generated — generated is locked to `generatedVersion`.
@@ -137,7 +141,39 @@ export const loadQuoteFor = async (id) => {
     return { opportunity, quote };
 };
 
-/** { project?, projectType?, projectTypeOther?, quoteDate?, taxTreatment?, gstRatePct? } — a draft only. */
+export const SAVINGS_BASIS_MAX = 600;
+const MAX_YEARLY_DOLLARS = 10_000_000;
+
+/**
+ * The savings fields of a quote update, checked: { annualSavings?,
+ * currentAnnualBill?, savingsBasis? } → the columns to set. Blank or null
+ * clears a figure ("not estimated"). Only the keys sent are returned.
+ */
+export const savingsFields = (payload = {}) => {
+    const update = {};
+    for (const [key, label] of [
+        ["annualSavings", "annualSavings (the yearly savings)"],
+        ["currentAnnualBill", "currentAnnualBill (the yearly electricity bill today)"],
+    ]) {
+        if (payload[key] === undefined) continue;
+        const value = num(payload[key]);
+        if (value === null) {
+            update[key] = null;
+            continue;
+        }
+        if (!Number.isFinite(value) || value < 0 || value > MAX_YEARLY_DOLLARS)
+            throw httpError(400, `${label} must be an amount between 0 and ${MAX_YEARLY_DOLLARS.toLocaleString("en-AU")}`);
+        // Nothing saved a year is the same as not estimated: no payback can come of it.
+        update[key] = value > 0 ? Math.round(value * 100) / 100 : null;
+    }
+    if (payload.savingsBasis !== undefined) update.savingsBasis = text(payload.savingsBasis, SAVINGS_BASIS_MAX) || null;
+    return update;
+};
+
+/**
+ * { project?, projectType?, projectTypeOther?, quoteDate?, taxTreatment?,
+ *   gstRatePct?, annualSavings?, currentAnnualBill?, savingsBasis? } — a draft only.
+ */
 export const updateQuote = async (id, payload = {}) => {
     const { opportunity, quote } = await loadQuoteFor(id);
     assertEditable(quote);
@@ -172,6 +208,7 @@ export const updateQuote = async (id, payload = {}) => {
             throw httpError(400, "gstRatePct must be between 0 and 100");
         update.gstRatePct = rate;
     }
+    Object.assign(update, savingsFields(payload));
     await quote.update(update);
     return presentQuote(await findQuote(opportunity.id), opportunity);
 };

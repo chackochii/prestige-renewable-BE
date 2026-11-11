@@ -30,7 +30,7 @@ import { PROJECT_TYPES } from "../model/quote.js";
 import { COST_CALC_TYPES, COST_KINDS } from "../model/quoteCost.js";
 import { cleanReading, energySizing, quotedSystem } from "./energyBillService.js";
 import { recordSystemEvent } from "./leadWorkflowService.js";
-import { assertEditable, findQuote, loadQuoteFor, presentQuote } from "./quoteService.js";
+import { assertEditable, findQuote, loadQuoteFor, presentQuote, SAVINGS_BASIS_MAX } from "./quoteService.js";
 
 const { QuoteItem, QuoteCost, Document, sequelize } = db;
 
@@ -345,13 +345,48 @@ export const suggestQuote = async (id, payload = {}) => {
 
 // ---- Apply ------------------------------------------------------------------
 
+const wholeNumber = new Intl.NumberFormat("en-AU", { maximumFractionDigits: 0 });
+
+/**
+ * A bill's sizing for the quoted system → the savings columns the quote keeps
+ * ({ annualSavings, currentAnnualBill, savingsBasis }), the basis written for
+ * the customer, who reads it on the proposal. Null when there are no savings
+ * to show (no usage rate on the bill, or no system whose size could be read).
+ */
+const savingsFromSizing = (sizing) => {
+    const proposed = sizing?.proposed;
+    if (!proposed?.annualSavings) return null;
+    const system = [
+        proposed.systemKw ? `${proposed.systemKw} kW of solar` : "",
+        proposed.batteryKwh ? `a ${proposed.batteryKwh} kWh battery` : "",
+    ]
+        .filter(Boolean)
+        .join(" and ");
+    const basis =
+        `Worked out from your electricity bill: about ${wholeNumber.format(sizing.annualKwh)} kWh a year at ${sizing.usageRateCents} c a kWh` +
+        `${sizing.feedInCents ? `, and ${sizing.feedInCents} c a kWh for power sent back to the grid` : ""}. ` +
+        `${system ? `${system[0].toUpperCase()}${system.slice(1)} would supply about ${proposed.usageCoveredPct}% of the power you use. ` : ""}` +
+        "Electricity prices are held at today's rates and the daily supply charge is unchanged.";
+    return {
+        annualSavings: proposed.annualSavings,
+        currentAnnualBill: sizing.currentAnnualCost ?? null,
+        savingsBasis: clean(basis, SAVINGS_BASIS_MAX),
+    };
+};
+
 /**
  * Puts a reviewed suggestion into the draft:
  * { mode: "replace" | "add", items: [{ itemKey, brand, quantity }],
  *   costs?: [{ kind, costType, calcType, value, description }],
- *   project?, projectType?, billDocumentId? } → the quote.
+ *   project?, projectType?, billDocumentId?, bill?, systemKw?, batteryKwh? } → the quote.
  * billDocumentId (the bill a quote from a bill was read from) only names
  * the bill in the job's history.
+ *
+ * With `bill` (the reviewed reading the suggestion was sized from) the
+ * quote's savings are set too: worked out again for the lines the draft holds
+ * once these are in, so unticking a line on the way in is reflected.
+ * `systemKw` / `batteryKwh` stand in for a size the lines do not show (the
+ * screen sends them only when every proposed line was kept).
  *
  * "replace" swaps the draft's lines for these; "add" keeps what is there and
  * appends. Items are priced from the catalog again here — what the screen
@@ -375,6 +410,19 @@ export const applySuggestion = async (id, payload = {}, actor) => {
     if (PROJECT_TYPES.includes(payload.projectType)) {
         header.projectType = payload.projectType;
         if (payload.projectType !== "Other") header.projectTypeOther = null;
+    }
+
+    // A quote from a bill: what the system saves, for the lines the draft will hold.
+    let savings = null;
+    if (payload.bill !== undefined && payload.bill !== null) {
+        if (typeof payload.bill !== "object" || Array.isArray(payload.bill)) throw httpError(400, "bill must be a bill reading");
+        const lines = mode === "replace" ? items : [...(quote.items || []), ...items];
+        const fromLines = quotedSystem(lines);
+        const systemKw = fromLines.systemKw ?? size(payload.systemKw);
+        const batteryKwh = fromLines.batteryKwh ?? size(payload.batteryKwh);
+        if (systemKw || batteryKwh)
+            savings = savingsFromSizing(energySizing(cleanReading(payload.bill), { state: opportunity.siteState, systemKw, batteryKwh }));
+        if (savings) Object.assign(header, savings);
     }
 
     await sequelize.transaction(async (transaction) => {
@@ -404,7 +452,7 @@ export const applySuggestion = async (id, payload = {}, actor) => {
     const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
     await recordSystemEvent(
         opportunity,
-        `AI-assisted quote${bill ? ` from the electricity bill "${bill.name}"` : ""} ${mode === "replace" ? "put into" : "added to"} the draft of ${quote.quoteNumber} — ${count(items.length, "item")}${costs.length ? `, ${count(costs.length, "cost line")}` : ""}. To be reviewed before it is generated.`,
+        `AI-assisted quote${bill ? ` from the electricity bill "${bill.name}"` : ""} ${mode === "replace" ? "put into" : "added to"} the draft of ${quote.quoteNumber} — ${count(items.length, "item")}${costs.length ? `, ${count(costs.length, "cost line")}` : ""}${savings ? `; estimated savings $${wholeNumber.format(savings.annualSavings)} a year set on the quote` : ""}. To be reviewed before it is generated.`,
         actor
     );
     return presentQuote(await findQuote(opportunity.id), opportunity);

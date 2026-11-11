@@ -32,6 +32,11 @@ export default (sequelize, DataTypes) => {
                 validate: { isIn: [TAX_TREATMENTS] },
             },
             gstRatePct: { type: DataTypes.DECIMAL(5, 2), allowNull: false, defaultValue: 10 },
+            // What the system saves the customer — the proposal's payback is
+            // worked out from it and the quote's total (client side, not stored).
+            annualSavings: { type: DataTypes.DECIMAL(12, 2), allowNull: true }, // $ a year, incl. GST
+            currentAnnualBill: { type: DataTypes.DECIMAL(12, 2), allowNull: true }, // $ a year on electricity today
+            savingsBasis: { type: DataTypes.TEXT, allowNull: true }, // how it was worked out, for the customer
             status: {
                 type: DataTypes.STRING(20),
                 allowNull: false,
