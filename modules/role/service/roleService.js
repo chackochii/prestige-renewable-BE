@@ -75,6 +75,13 @@ export const userHasPermission = async (user, permissionCode) => {
     return roleCodes.some((code) => byRole.get(code)?.has(permissionCode));
 };
 
+/** Codes of the active roles that hold a permission (own or inherited grant), ADM always among them. */
+export const roleCodesWithPermission = async (permissionCode) => {
+    const byRole = await getGrants();
+    const codes = [...byRole].filter(([, granted]) => granted.has(permissionCode)).map(([code]) => code);
+    return [...new Set([SUPER_ROLE_CODE, ...codes])];
+};
+
 // Effective permission codes for a set of role codes — embedded in the
 // login/me payload so the frontend gates navigation and screens from data.
 // ADM holders get whatever is granted plus the code-level bypass; the

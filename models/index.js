@@ -35,6 +35,7 @@ import defineBillingRequest from "../modules/billing/model/billingRequest.js";
 import defineDocument from "../modules/document/model/document.js";
 import defineAuditLog from "../modules/audit/model/auditLog.js";
 import defineNotification from "../modules/notification/model/notification.js";
+import defineDataExport from "../modules/export/model/dataExport.js";
 import defineCampaign from "../modules/campaign/model/campaign.js";
 import defineCollaborationRequest from "../modules/collaboration/model/collaborationRequest.js";
 import defineCollaborationProgress from "../modules/collaboration/model/collaborationProgress.js";
@@ -87,6 +88,7 @@ db.BillingRequest = defineBillingRequest(sequelize, DataTypes);
 db.Document = defineDocument(sequelize, DataTypes);
 db.AuditLog = defineAuditLog(sequelize, DataTypes);
 db.Notification = defineNotification(sequelize, DataTypes);
+db.DataExport = defineDataExport(sequelize, DataTypes);
 
 // Cross-department requests and assignments
 db.CollaborationRequest = defineCollaborationRequest(sequelize, DataTypes);
@@ -134,6 +136,7 @@ export const {
     Document,
     AuditLog,
     Notification,
+    DataExport,
     CollaborationRequest,
     CollaborationProgress,
     CollaborationAttachment,

@@ -80,6 +80,11 @@ const PERMISSIONS = MODULES.flatMap(([prefix, label]) =>
 ).concat([
     ["construction.checklists.update", "Update construction checklists", "Construction & Commissioning"],
     ["construction.hse.update", "Update HSE records", "Construction & Commissioning"],
+    // Excel export of job data — the business unit's backup (migrations
+    // 20261112000001 and 20261113000001). ADM, BO and SYS by default: they are
+    // the ones reminded when nobody has taken a backup for 7 days. An export
+    // takes customers' details out of the system.
+    ["admin.export", "Export all job data to Excel (backups)", "System Administration"],
 ]);
 
 const ALL = PERMISSIONS.map(([code]) => code);
@@ -101,6 +106,7 @@ const GRANTS = {
         ...of("warranty", "read", "approve"),
         ...of("admin", "read", "approve"),
         ...of("dashboards", "read"),
+        "admin.export",
     ],
     SMM: [
         ...of("leads", "create", "read", "update", "delete", "approve"),
@@ -194,6 +200,7 @@ const GRANTS = {
     SYS: [
         ...of("admin", "create", "read", "update", "delete", "approve"),
         ...of("dashboards", "read", "update"),
+        "admin.export",
     ],
     HRM: [],
 };

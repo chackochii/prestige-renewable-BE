@@ -51,6 +51,7 @@ import * as collaboration from "../modules/collaboration/controller/collaboratio
 import * as proposals from "../modules/opportunity/controller/proposalController.js";
 import * as approvals from "../modules/opportunity/controller/approvalsController.js";
 import * as procurement from "../modules/opportunity/controller/procurementController.js";
+import * as dataExport from "../modules/export/controller/exportController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -88,6 +89,11 @@ router.get("/proposals", read, requireUnitAccess((req) => req.query.businessUnit
 router.get("/approvals", requirePermission("approvals.read"), requireUnitAccess((req) => req.query.businessUnitId), approvals.board); // ?businessUnitId=&search=&filter= → [job]; filter: in_progress|ready|rejected|overdue|on_hold|returned|review|sent
 // The procurement page: stage-6 jobs, whole (plus ones that moved on in the last 30 days).
 router.get("/procurement", requirePermission("procurement.read"), requireUnitAccess((req) => req.query.businessUnitId), procurement.board); // ?businessUnitId=&search= → [job]
+// Excel export of the unit's jobs — the backup (admin.export: ADM, BO and SYS
+// by default; the data leaves the system). Every stage is included; with no
+// filter it is a full backup and resets the 7-day reminder.
+router.get("/export", requirePermission("admin.export"), requireUnitAccess((req) => req.query.businessUnitId), dataExport.exportMany); // ?businessUnitId=&stage=&lifecycle=&from=&to= → .xlsx
+router.get("/export/backups", requirePermission("admin.export"), dataExport.backups); // → { reminderDays, units: [{ id, name, jobCount, lastBackup, daysSince, due }] } — the caller's units
 
 // Deny-by-default unit scoping (ADM excepted): a caller only reaches records
 // in the business units they are assigned to. Every /:id/... route below is
@@ -104,6 +110,7 @@ router.patch("/:id", write, update); // lead fields, all optional
 // permission for the stage the record is actually leaving (see stageAccess.js).
 router.post("/:id/advance", requireAnyPermission(...ADVANCE_PERMISSIONS), advance); // next enabled stage; gates apply
 router.delete("/:id", requirePermission("leads.delete"), remove); // stage-1 records only
+router.get("/:id/export", requirePermission("admin.export"), dataExport.exportOne); // → .xlsx of the whole job (every stage's records)
 
 // Proposals emailed to the customer (stage 3). Sending, resending and recording
 // an answer given by phone are sales work; the customer answers through the

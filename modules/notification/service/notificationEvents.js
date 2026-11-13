@@ -74,6 +74,10 @@ export const NOTIFICATION_EVENTS = {
     "proposal.accepted": { label: "Customer accepted the proposal", priority: "high" },
     "proposal.renegotiate": { label: "Customer asked to renegotiate", priority: "high" },
     "proposal.rejected": { label: "Customer declined the proposal", priority: "high" },
+
+    // Nobody has downloaded a full Excel backup of a business unit for
+    // BACKUP_REMINDER_DAYS (modules/export/service/backupReminder).
+    "backup.overdue": { label: "Excel backup overdue — download one", priority: "high" },
 };
 
 export const EVENT_KEYS = Object.keys(NOTIFICATION_EVENTS);

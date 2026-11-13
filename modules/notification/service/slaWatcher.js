@@ -15,6 +15,7 @@ import { notify } from "./notificationService.js";
 import { assignedUserIds, customerLabel } from "../../opportunity/service/opportunityPeople.js";
 import { overdueRequests, requestLabel } from "../../collaboration/service/collaborationService.js";
 import { remindPendingApprovals } from "../../opportunity/service/procurementService.js";
+import { runBackupReminderCheck } from "../../export/service/backupReminder.js";
 
 const { Opportunity, BusinessUnit } = db;
 
@@ -117,7 +118,13 @@ export const startSlaWatcher = () => {
         try {
             // Price variations still waiting on an approver get the chart's
             // "frequent high-priority notification" — once a day per person.
-            const raised = (await runSlaCheck()) + (await runOverdueRequestCheck()) + (await remindPendingApprovals());
+            // And business units nobody has backed up to Excel for 7 days
+            // (BACKUP_REMINDER_DAYS) remind the people who can.
+            const raised =
+                (await runSlaCheck()) +
+                (await runOverdueRequestCheck()) +
+                (await remindPendingApprovals()) +
+                (await runBackupReminderCheck());
             if (raised) logger.info(`SLA watcher: ${raised} overdue notification(s) raised`);
         } catch (err) {
             // A laptop that slept, a dropped VPN, a database that is briefly

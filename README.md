@@ -52,6 +52,8 @@ SEED_SUPERADMIN_PASSWORD=ChangeMe@xml
 
 # Notifications — how often to check for records past their SLA (0 disables)
 # SLA_CHECK_INTERVAL_MINUTES=1440
+# Days without a full Excel backup before admins are reminded (0 disables; runs in the SLA pass)
+# BACKUP_REMINDER_DAYS=7
 
 # Automated lead capture (Meta / Google Ads webhooks) — see "Automated lead capture"
 # META_APP_SECRET=                 # Meta app → Settings → Basic → App secret; signs every delivery
@@ -88,6 +90,7 @@ DO_SPACES_SECRET=
 | `INTEGRATION_SECRET_KEY` | recommended | 32-byte key (hex or base64) that encrypts Page access tokens in `integration_connections.credentials`; unset = stored in clear, warned once |
 | `LEAD_SYNC_INTERVAL_MINUTES` | no | How often every active Meta connection is polled for leads the webhook missed (default 60; 0 disables) |
 | `SLA_CHECK_INTERVAL_MINUTES` | no (default 1440 — once a day) | How often to look for records past their stage SLA and notify whoever is assigned; `0` turns the check off |
+| `BACKUP_REMINDER_DAYS` | no (default 7) | Days a business unit can go without a full Excel backup before everyone holding `admin.export` is reminded. Checked in the same daily pass, so `SLA_CHECK_INTERVAL_MINUTES=0` stops it too; `0` turns it off |
 | `LOG_TO_FILES` | no (default on) | `false` stops writing `logs/*.log` — use it when the platform collects stdout. Production always logs JSON to stdout |
 | `LOG_DIR`, `LOG_MAX_SIZE_MB`, `LOG_MAX_FILES`, `LOG_LEVEL` | no (`logs`, 10, 5, `info`) | Log folder, size at which a file rotates, how many rotated files are kept, minimum level. Never ship the log folder — it holds real request data |
 | `STREAM_TOKEN_EXPIRES_IN` | no (default 12h) | Lifetime of the token that opens the notification stream |
@@ -338,6 +341,24 @@ Six screens page their lists, 12 rows to a page with numbered pages below, newes
 | `GET /api/opportunities/procurement` | the job that reached procurement most recently first | `search` | `counts`: `{ all, inStage, awaitingApproval, purchaseOrders, greenDeal }` (the cards) |
 
 The three boards still return each job whole (history and notices included) so opening one needs no second request; those lookups are made for the rows on the page only. `pageSize` defaults to 12 on the boards and 50 on `/api/opportunities` (up to 200 — Home reads the whole list).
+
+## Excel export
+
+Job data can be downloaded as an `.xlsx` workbook, for keeping a copy outside the system and for reading it in a spreadsheet. The routes need **`admin.export`** ("Export all job data to Excel (backups)", migrations `20261112000001` and `20261113000001`), held by default by the superadmin (ADM), the Business Owner (BO) and the SysAdmin (SYS): an export takes customers' details out of the system, so grant it to other roles deliberately on the roles screen.
+
+| Method | Route | Returns |
+|---|---|---|
+| `GET` | `/api/opportunities/:id/export` | one job: a **Summary** sheet (every field on the record, by section), then a sheet for each kind of record it has |
+| `GET` | `/api/opportunities/export?businessUnitId=&stage=&lifecycle=&from=&to=` | every job in the unit: a **Jobs** sheet (one row per job, a column per field), then every record sheet. `stage` 1–11, `lifecycle` `Active \| Won \| Lost \| Closed \| all`, `from` / `to` the day created (`YYYY-MM-DD`, in the unit's timezone). With none of them it is a **full backup** (`<CODE>-backup-<date>.xlsx`). At most 5,000 jobs; 404 when nothing matches |
+| `GET` | `/api/opportunities/export/backups` | the caller's units (every active one for ADM): `{ reminderDays, units: [{ id, code, name, timezone, jobCount, lastBackup: { at, byName } \| null, daysSince, due }] }` — the Control Centre → Data backup screen |
+
+The record sheets, each row starting with the job number: Job history, Meetings, Quotes, Quote lines, Quote versions, Version lines (the lines of each saved version, as issued), Proposals, Re-quotes, Approvals, Procurement BOQ, Supplier quotes, Procurement record (the checklists, Green Deal, variation approvals and BOQ revisions, one answer a row), Purchase orders, Requests, Site visits (the CL-04 answers, one a row) and Documents (job documents and request attachments, with a link to each file — the files themselves are not in the workbook). An Export info sheet says who exported what, when, with which filters, and the timezone the times are in.
+
+Access: the unit must be one of the caller's. The unit export includes **every stage** — `admin.export` is the backup permission, and SYS (and partly BO) read no stages day to day — while the one-job export goes through `requireOpportunityAccess` like opening the job. Every export is logged and written to `data_exports` (who, unit, job, filters, job count, `full_backup`). Data comes in one query per table for all the jobs together (`modules/export/service/exportService.js`); the layout is in `exportWorkbook.js`. Dates and money are real Excel values, times are the unit's local time, and the response is sent `Cache-Control: no-store`.
+
+### Backup reminder
+
+A full backup is a unit export with no stage, lifecycle or date filter. The daily SLA pass (`modules/export/service/backupReminder.js`) finds every unit that is not inactive whose newest full backup is `BACKUP_REMINDER_DAYS` (7) days old or more — or, never backed up, whose first job is that old; a unit with no jobs is skipped — and raises `backup.overdue` (high) to every active user who holds `admin.export` and is assigned to the unit (ADM: every unit): "You haven't taken a backup of <unit> for 7 days … Please download the Excel file now: Control Centre → Data backup → Download backup." The dedupe key carries the date measured from and the number of whole periods gone by, so it repeats at 14, 21… days rather than every pass. A full backup marks the unit's open reminders read for everyone; in the app the notice opens `/admin/backup`.
 
 ## Demo data
 

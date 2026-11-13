@@ -39,7 +39,9 @@ app.use(
                 : false,
     })
 );
-app.use(cors());
+// Content-Disposition is exposed so the app can read a download's file name
+// (the Excel exports) when it is served from another origin than the API.
+app.use(cors({ exposedHeaders: ["Content-Disposition"] }));
 // A site-visit report carries drawn signatures as PNG data URLs, which outgrow
 // the 100 kB default. Only that public route gets the larger allowance; the
 // general parser below then leaves an already-parsed body alone.
