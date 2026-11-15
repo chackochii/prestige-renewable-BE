@@ -6,6 +6,9 @@ import {
     createUser,
     updateUser,
     resetPassword,
+    resetPin,
+    clearPin,
+    setOwnPin,
     deleteUser,
     loginUser,
 } from "../service/userService.js";
@@ -13,11 +16,18 @@ import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse } from "../../../utils/apiResponse.js";
 
 export const login = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, pin } = req.body;
 
-    const { token, user } = await loginUser({ email, password });
+    const { token, user, mustChangePin } = await loginUser({ email, password, pin }, req.activity);
 
-    successResponse(res, { token, user });
+    successResponse(res, { token, user, mustChangePin });
+});
+
+// The signed-in person sets or changes their own PIN; answers with a full session token.
+export const setMyPin = asyncHandler(async (req, res) => {
+    const { token, user } = await setOwnPin(req.user.id, req.body, req.activity);
+
+    successResponse(res, { token, user, message: "PIN set" });
 });
 
 // Current user, resolved from the bearer token (tokenValidator sets req.user)
@@ -57,25 +67,39 @@ export const getOne = asyncHandler(async (req, res) => {
 });
 
 export const create = asyncHandler(async (req, res) => {
-    const user = await createUser(req.body, req.user ?? null);
+    const user = await createUser(req.body, req.user ?? null, req.activity);
 
-    successResponse(res, { data: user }, 201);
+    // The temporary PIN rides beside the record, once, for the administrator to pass on.
+    successResponse(res, { data: user, ...(user.temporaryPin ? { temporaryPin: user.temporaryPin } : {}) }, 201);
 });
 
 export const update = asyncHandler(async (req, res) => {
-    const user = await updateUser(req.params.id, req.body, req.user ?? null);
+    const user = await updateUser(req.params.id, req.body, req.user ?? null, req.activity);
 
     successResponse(res, { data: user });
 });
 
 export const changePassword = asyncHandler(async (req, res) => {
-    await resetPassword(req.params.id, req.body.password, req.user ?? null);
+    await resetPassword(req.params.id, req.body.password, req.user ?? null, req.activity);
 
     successResponse(res, { message: "Password updated successfully" });
 });
 
+// An administrator issues a (new) temporary PIN — returned once.
+export const changePin = asyncHandler(async (req, res) => {
+    const { temporaryPin, user } = await resetPin(req.params.id, req.body, req.user ?? null, req.activity);
+
+    successResponse(res, { data: user, temporaryPin, message: "Temporary PIN issued — the user sets their own on first login" });
+});
+
+export const removePin = asyncHandler(async (req, res) => {
+    await clearPin(req.params.id, req.user ?? null, req.activity);
+
+    successResponse(res, { message: "PIN removed" });
+});
+
 export const remove = asyncHandler(async (req, res) => {
-    await deleteUser(req.params.id, req.user ?? null);
+    await deleteUser(req.params.id, req.user ?? null, req.activity);
 
     successResponse(res, { message: "User deleted successfully" });
 });

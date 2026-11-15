@@ -5,9 +5,13 @@
 import bcrypt from "bcryptjs";
 
 // Hashing lives on the model so no caller can accidentally store plain text.
+// The PIN arrives already hashed (userService hashes it with hashPin) because
+// the plain temporary PIN has to be handed back to the administrator once.
 const hashPassword = async (user) => {
-    if (user.changed("password")) user.password = await bcrypt.hash(user.password, 10);
+    if (user.changed("password") && user.password) user.password = await bcrypt.hash(user.password, 10);
 };
+
+export const hashPin = (pin) => bcrypt.hash(String(pin), 10);
 
 export default (sequelize, DataTypes) => {
     const User = sequelize.define(
@@ -20,7 +24,15 @@ export default (sequelize, DataTypes) => {
             email: { type: DataTypes.STRING, allowNull: false, validate: { isEmail: true } },
             // Plain text on the way in; the beforeCreate/beforeUpdate hooks hash
             // it. Length is validated pre-hash (a bcrypt hash is 60 chars).
-            password: { type: DataTypes.STRING, allowNull: false, validate: { len: [8, 100] } },
+            // Null for a user who signs in with a PIN only (migration 20261114000001).
+            password: { type: DataTypes.STRING, allowNull: true, validate: { len: [8, 100] } },
+            // The PIN (hashed) beside the password. An administrator issues a
+            // temporary one; the person must replace it with their own on first
+            // login (pinIsTemporary), when pinSetAt is stamped.
+            pinHash: { type: DataTypes.STRING(60), allowNull: true },
+            pinIsTemporary: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            pinSetAt: { type: DataTypes.DATE, allowNull: true },
+            pinIssuedById: { type: DataTypes.INTEGER, allowNull: true },
             roles: {
                 type: DataTypes.ARRAY(DataTypes.STRING(20)),
                 allowNull: false,
@@ -59,15 +71,20 @@ export default (sequelize, DataTypes) => {
         {
             tableName: "users",
             paranoid: true, // soft delete — destroy() sets deleted_at, queries exclude deleted rows
-            defaultScope: { attributes: { exclude: ["password"] } },
-            scopes: { withPassword: {} },
+            defaultScope: { attributes: { exclude: ["password", "pinHash"] } },
+            scopes: { withPassword: {} }, // every column, the hashes included — the auth layer only
             hooks: { beforeCreate: hashPassword, beforeUpdate: hashPassword },
         }
     );
 
     // For the auth layer — fetch via scope("withPassword") first.
     User.prototype.checkPassword = function (plain) {
+        if (!this.password) return Promise.resolve(false);
         return bcrypt.compare(plain, this.password);
+    };
+    User.prototype.checkPin = function (plain) {
+        if (!this.pinHash) return Promise.resolve(false);
+        return bcrypt.compare(String(plain), this.pinHash);
     };
 
     User.associate = (db) => {
@@ -78,6 +95,7 @@ export default (sequelize, DataTypes) => {
             as: "businessUnits",
         });
         User.belongsTo(db.Referrer, { foreignKey: "referrerId", as: "referrer" });
+        User.belongsTo(db.User, { foreignKey: "pinIssuedById", as: "pinIssuedBy" });
         User.hasMany(db.Notification, { foreignKey: "userId", as: "notifications" });
     };
 

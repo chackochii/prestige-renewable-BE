@@ -4,16 +4,59 @@
 // them) and, for REF users, the referrer organisation their portal login
 // belongs to. Role codes are validated against the roles table by the model,
 // so roles created at runtime are immediately assignable.
+import crypto from "node:crypto";
 import { Op } from "sequelize";
 import db from "../../../models/index.js";
 import { SUPER_ROLE_CODE, listPermissionCodesForRoles } from "../../role/service/roleService.js";
 import { DEPARTMENTS, departmentsForRoles } from "../../collaboration/model/collaborationRequest.js";
+import { diff, recordActivity } from "../../activity/service/activityService.js";
+import { hashPin } from "../model/user.js";
 import { parseId } from "../../../utils/ids.js";
-import { signToken } from "../../../utils/jwt.js";
+import { signPinSetupToken, signToken } from "../../../utils/jwt.js";
 
 const { User, BusinessUnit, UserBusinessUnit, Referrer, sequelize } = db;
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+// ---------------------------------------------------------------------------
+// PINs. A PIN is 4–8 digits. Administrators issue a temporary one when adding
+// a team member (or on request); the person signs in with it and must set
+// their own before the app lets them in (loginUser → pin_setup token).
+
+const PIN_RE = /^\d{4,8}$/;
+const TEMP_PIN_LENGTH = 6;
+
+/** A fresh random temporary PIN — six digits, never all the same or a straight run. */
+export const generateTemporaryPin = () => {
+    for (;;) {
+        const pin = String(crypto.randomInt(0, 10 ** TEMP_PIN_LENGTH)).padStart(TEMP_PIN_LENGTH, "0");
+        if (!isWeakPin(pin)) return pin;
+    }
+};
+
+const isWeakPin = (pin) => {
+    if (/^(\d)\1+$/.test(pin)) return true; // 111111
+    const digits = [...pin].map(Number);
+    const ascending = digits.every((d, i) => i === 0 || d === (digits[i - 1] + 1) % 10);
+    const descending = digits.every((d, i) => i === 0 || d === (digits[i - 1] + 9) % 10);
+    return ascending || descending; // 123456, 987654
+};
+
+const cleanPin = (value, label = "pin") => {
+    const pin = String(value ?? "").trim();
+    if (!PIN_RE.test(pin)) throw httpError(400, `${label} must be 4 to 8 digits`);
+    if (isWeakPin(pin)) throw httpError(400, `${label} is too easy to guess — avoid repeated or sequential digits`);
+    return pin;
+};
+
+/** What a user record says about its PIN, for the admin screens and the session payload. */
+export const pinStateOf = (user) => ({
+    hasPin: Boolean(user.pinHash ?? user.pinSetAt ?? user.pinIsTemporary),
+    mustChangePin: Boolean(user.pinIsTemporary),
+    pinSetAt: user.pinSetAt ?? null,
+});
+
+const ACTIVITY_FIELDS = ["name", "email", "title", "phone", "status", "roles", "referrerId"];
 
 // Model validation failures (email format, unknown roles, weak password) are
 // translated into 400s with field details by middleware/errorHandler, so the
@@ -141,8 +184,10 @@ export const getUser = async (id) => {
 // bypasses checks in code; the frontend mirrors that.
 export const getUserWithPermissions = async (id) => {
     const user = await getUser(id);
+    const secrets = await User.scope("withPassword").findByPk(user.id, { attributes: ["id", "pinHash", "pinIsTemporary", "pinSetAt"] });
     return {
         ...user.get({ plain: true }),
+        ...pinStateOf(secrets ?? user),
         permissions: await listPermissionCodesForRoles(user.roles),
     };
 };
@@ -225,12 +270,21 @@ export const listDirectory = async ({ businessUnitId, department } = {}, actor =
 // actor: the administrator or director performing the action (recorded on
 // unit assignments). Scoped actors create users only inside their own units
 // and can never mint administrator accounts.
-export const createUser = async (payload = {}, actor = null) => {
+//
+// Credentials: a password (8+ characters), a temporary PIN (`temporaryPin`,
+// 4–8 digits, or `issuePin: true` to have one generated), or both. The
+// temporary PIN is returned once, as `temporaryPin` on the result, for the
+// administrator to pass on; the person replaces it on first login.
+export const createUser = async (payload = {}, actor = null, ctx = null) => {
     const actorId = actor?.id ?? null;
     const { name, password, title, phone, status } = payload;
     if (typeof name !== "string" || !name.trim()) throw httpError(400, "name is required");
-    if (typeof password !== "string" || password.length < 8)
-        throw httpError(400, "password is required (minimum 8 characters)");
+    const wantsPin = payload.issuePin === true || payload.temporaryPin !== undefined;
+    const temporaryPin = wantsPin ? (payload.temporaryPin !== undefined ? cleanPin(payload.temporaryPin, "temporaryPin") : generateTemporaryPin()) : null;
+    if (password !== undefined && password !== null && password !== "" && (typeof password !== "string" || password.length < 8))
+        throw httpError(400, "password must be at least 8 characters");
+    if (!password && !temporaryPin)
+        throw httpError(400, "Give the user a password (minimum 8 characters) or a temporary PIN (temporaryPin, or issuePin: true)");
     const email = normaliseEmail(payload.email);
     const roles = normaliseRoles(payload.roles);
     const referrerId = payload.referrerId == null ? null : parseId(payload.referrerId, "referrerId");
@@ -255,7 +309,10 @@ export const createUser = async (payload = {}, actor = null) => {
             {
                 name: name.trim(),
                 email,
-                password, // hashed by the model hook
+                password: password || null, // hashed by the model hook
+                pinHash: temporaryPin ? await hashPin(temporaryPin) : null,
+                pinIsTemporary: Boolean(temporaryPin),
+                pinIssuedById: temporaryPin ? actorId : null,
                 roles,
                 title: title ?? null,
                 phone: phone ?? null,
@@ -268,7 +325,12 @@ export const createUser = async (payload = {}, actor = null) => {
         return created;
     });
 
-    return getUser(user.id);
+    await recordActivity({
+        actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "created",
+        meta: { roles, businessUnitIds: unitIds, credentials: [password ? "password" : null, temporaryPin ? "temporary_pin" : null].filter(Boolean) },
+    });
+    const fresh = await getUser(user.id);
+    return temporaryPin ? Object.assign(fresh, { temporaryPin }) : fresh;
 };
 
 // Partial update: name, email, title, phone, status, roles, referrerId,
@@ -276,9 +338,10 @@ export const createUser = async (payload = {}, actor = null) => {
 // touch only non-admin users who share one of their units, cannot grant ADM,
 // and edit unit assignments within their scope — assignments to units outside
 // the actor's scope are preserved untouched.
-export const updateUser = async (id, payload = {}, actor = null) => {
+export const updateUser = async (id, payload = {}, actor = null, ctx = null) => {
     const actorId = actor?.id ?? null;
     const user = await getUser(id);
+    const before = { ...user.get({ plain: true }), businessUnitIds: targetUnitIds(user) };
     const scope = await actorUnitScope(actor);
     assertActorCanManage(scope, user);
     if (payload.password !== undefined)
@@ -333,41 +396,111 @@ export const updateUser = async (id, payload = {}, actor = null) => {
         if (unitIds !== null) await syncBusinessUnits(user.id, unitIds, actorId, transaction);
     });
 
-    return getUser(id);
+    const fresh = await getUser(id);
+    const changes = diff(before, { ...fresh.get({ plain: true }), businessUnitIds: targetUnitIds(fresh) }, [...ACTIVITY_FIELDS, "businessUnitIds"]);
+    if (changes) await recordActivity({ actor, ctx, entityType: "user", entityId: fresh.id, entityLabel: fresh.name, action: "updated", changes });
+    return fresh;
 };
 
 // Admin/director reset. Self-service change (with current-password check)
 // arrives with the auth module.
-export const resetPassword = async (id, password, actor = null) => {
+export const resetPassword = async (id, password, actor = null, ctx = null) => {
     if (typeof password !== "string" || password.length < 8)
         throw httpError(400, "password is required (minimum 8 characters)");
     const user = await getUser(id);
     assertActorCanManage(await actorUnitScope(actor), user);
     await user.update({ password }); // hashed by the model hook
+    await recordActivity({ actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "password_reset" });
 };
 
-export const deleteUser = async (id, actor = null) => {
+/**
+ * An administrator issues a new temporary PIN ({ temporaryPin? } — generated
+ * when not given). Returned once; the person must replace it on first login.
+ */
+export const resetPin = async (id, payload = {}, actor = null, ctx = null) => {
+    const user = await getUser(id);
+    assertActorCanManage(await actorUnitScope(actor), user);
+    const temporaryPin = payload.temporaryPin !== undefined ? cleanPin(payload.temporaryPin, "temporaryPin") : generateTemporaryPin();
+    await user.update({ pinHash: await hashPin(temporaryPin), pinIsTemporary: true, pinSetAt: null, pinIssuedById: actor?.id ?? null });
+    await recordActivity({ actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "pin_reset" });
+    return { temporaryPin, user: await getUser(user.id) };
+};
+
+/** An administrator removes a user's PIN, so they sign in with their password only. */
+export const clearPin = async (id, actor = null, ctx = null) => {
+    const user = await getUser(id);
+    assertActorCanManage(await actorUnitScope(actor), user);
+    const secrets = await User.scope("withPassword").findByPk(user.id, { attributes: ["id", "password"] });
+    if (!secrets?.password) throw httpError(400, "This user has no password — issue a new PIN instead of removing the only way in");
+    await user.update({ pinHash: null, pinIsTemporary: false, pinSetAt: null, pinIssuedById: null });
+    await recordActivity({ actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "pin_removed" });
+};
+
+/**
+ * The signed-in person sets their own PIN: { pin, currentPin? , currentPassword? }.
+ * A temporary PIN is replaced without proof (the login with it was the
+ * proof); replacing a PIN they already chose, or adding one beside a
+ * password, needs the current PIN or the password. Answers with a full
+ * session token, since the caller may be holding only the set-up token.
+ */
+export const setOwnPin = async (userId, payload = {}, ctx = null) => {
+    const user = await User.scope("withPassword").findByPk(userId);
+    if (!user) throw httpError(404, "User not found");
+    const pin = cleanPin(payload.pin, "pin");
+    if (!user.pinIsTemporary) {
+        const proved =
+            (payload.currentPin !== undefined && (await user.checkPin(payload.currentPin))) ||
+            (payload.currentPassword !== undefined && (await user.checkPassword(payload.currentPassword)));
+        if (!proved) throw httpError(400, user.pinHash ? "Enter your current PIN (or password) to change it" : "Enter your password to set a PIN");
+    }
+    if (user.pinHash && (await user.checkPin(pin))) throw httpError(400, "Choose a PIN different from the current one");
+    const wasTemporary = user.pinIsTemporary;
+    await user.update({ pinHash: await hashPin(pin), pinIsTemporary: false, pinSetAt: new Date() });
+    await recordActivity({
+        actor: user, ctx, entityType: "user", entityId: user.id, entityLabel: user.name,
+        action: wasTemporary ? "pin_set_first_login" : "pin_changed",
+    });
+    return { token: signToken(user), user: await getUserWithPermissions(user.id) };
+};
+
+export const deleteUser = async (id, actor = null, ctx = null) => {
     const user = await getUser(id);
     assertActorCanManage(await actorUnitScope(actor), user);
     if (isActiveAdmin(user)) await assertAnotherActiveAdmin(user.id);
     await user.destroy(); // soft delete; unit assignments stay for the audit trail
+    await recordActivity({ actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "deleted" });
 };
 
 // Login for staff and referrer-portal users. Issues a JWT carrying the user
 // id; every request re-validates the user via the tokenValidator middleware.
-export const loginUser = async ({ email, password } = {}) => {
+//
+// { email, password } as always, or { email, pin }. A login with a temporary
+// PIN answers with mustChangePin: true and a token that only opens
+// GET /users/me and POST /users/me/pin — the person sets their own PIN there
+// and gets a full session token back.
+export const loginUser = async ({ email, password, pin } = {}, ctx = null) => {
     if (typeof email !== "string" || !email.trim()) throw httpError(400, "email is required");
-    if (typeof password !== "string" || !password) throw httpError(400, "password is required");
+    const withPin = pin !== undefined && pin !== null && pin !== "";
+    if (!withPin && (typeof password !== "string" || !password)) throw httpError(400, "password or pin is required");
 
     const user = await User.scope("withPassword").findOne({
         where: { email: email.trim().toLowerCase() },
     });
-    // Same message for unknown email and wrong password — no account probing
-    if (!user || !(await user.checkPassword(password)))
-        throw httpError(401, "Invalid email or password");
+    // Same message for unknown email and wrong credential — no account probing
+    const ok = user && (withPin ? await user.checkPin(pin) : await user.checkPassword(password));
+    if (!ok) throw httpError(401, withPin ? "Invalid email or PIN" : "Invalid email or password");
     if (user.status !== "active") throw httpError(401, "Account is disabled");
 
     await user.update({ lastLoginAt: new Date() });
+    const mustChangePin = withPin && Boolean(user.pinIsTemporary);
+    await recordActivity({
+        actor: user, ctx, entityType: "user", entityId: user.id, entityLabel: user.name,
+        action: "login", meta: { method: withPin ? "pin" : "password", ...(mustChangePin ? { temporaryPin: true } : {}) },
+    });
 
-    return { token: signToken(user), user: await getUserWithPermissions(user.id) };
+    return {
+        token: mustChangePin ? signPinSetupToken(user) : signToken(user),
+        user: await getUserWithPermissions(user.id),
+        mustChangePin,
+    };
 };

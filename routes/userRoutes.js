@@ -6,6 +6,9 @@ import {
     create,
     update,
     changePassword,
+    changePin,
+    removePin,
+    setMyPin,
     remove,
     login,
     me,
@@ -13,6 +16,8 @@ import {
 import tokenValidator from "../middleware/tokenValidator.js";
 import requirePermission from "../middleware/requirePermission.js";
 import rateLimit from "../middleware/rateLimit.js";
+import allowTokenScope from "../middleware/allowTokenScope.js";
+import { PIN_SETUP_SCOPE } from "../utils/jwt.js";
 
 const router = Router();
 
@@ -27,8 +32,12 @@ const loginLimiter = rateLimit({
     message: "Too many login attempts, try again in a few minutes.",
 });
 
-router.post("/login", loginLimiter, login); // { email, password } → { token, user }
-router.get("/me", tokenValidator, me); // current user from the bearer token
+router.post("/login", loginLimiter, login); // { email, password } or { email, pin } → { token, user, mustChangePin }
+// Both accept the PIN set-up token a temporary-PIN login hands out, as well as
+// a full session token: the person can see who they are and set their own PIN,
+// and nothing else, until they do.
+router.get("/me", allowTokenScope(PIN_SETUP_SCOPE), tokenValidator, me); // current user from the bearer token
+router.post("/me/pin", allowTokenScope(PIN_SETUP_SCOPE), tokenValidator, setMyPin); // { pin, currentPin? | currentPassword? } → { token, user }
 
 // People directory for pickers: id, name, title, roles, status and
 // departments (from the roles — collaboration DEPARTMENT_ROLES) of the active
@@ -43,12 +52,14 @@ router.get("/directory", tokenValidator, directory); // ?businessUnitId= (requir
 // in their own business units — and can never touch or create administrator
 // accounts.
 router.get("/", tokenValidator, requirePermission("admin.read"), getAll); // ?role=&status=&businessUnitId=&search=&page=&pageSize=
-// Body: { name, email, password, roles: ["SMM", ...], title?, phone?,
-//         status?, businessUnitIds?, referrerId? }
+// Body: { name, email, password? | temporaryPin? | issuePin?, roles: ["SMM", ...], title?, phone?,
+//         status?, businessUnitIds?, referrerId? } → { data: user, temporaryPin? } (the PIN is returned once)
 router.post("/", tokenValidator, requirePermission("admin.create"), create);
 router.get("/:id", tokenValidator, requirePermission("admin.read"), getOne);
 router.patch("/:id", tokenValidator, requirePermission("admin.update"), update); // same fields as create, all optional; no password here
 router.patch("/:id/password", tokenValidator, requirePermission("admin.update"), changePassword); // { password } — admin reset
+router.post("/:id/pin/reset", tokenValidator, requirePermission("admin.update"), changePin); // { temporaryPin? } → { data, temporaryPin } — a new temporary PIN
+router.delete("/:id/pin", tokenValidator, requirePermission("admin.update"), removePin); // sign in with the password only
 router.delete("/:id", tokenValidator, requirePermission("admin.delete"), remove); // soft delete
 
 export default router;

@@ -42,6 +42,20 @@ import defineCollaborationProgress from "../modules/collaboration/model/collabor
 import defineCollaborationAttachment from "../modules/collaboration/model/collaborationAttachment.js";
 import defineCollaborationEvent from "../modules/collaboration/model/collaborationEvent.js";
 import defineCollaborationSiteVisit from "../modules/collaboration/model/collaborationSiteVisit.js";
+import defineActivityLog from "../modules/activity/model/activityLog.js";
+import defineEquipmentCategory from "../modules/equipment/model/equipmentCategory.js";
+import defineSupplier from "../modules/equipment/model/supplier.js";
+import defineEquipment from "../modules/equipment/model/equipment.js";
+import defineEquipmentSupplierPrice from "../modules/equipment/model/equipmentSupplierPrice.js";
+import defineSupplierTransaction from "../modules/equipment/model/supplierTransaction.js";
+import defineLeadAssignment from "../modules/opportunity/model/leadAssignment.js";
+import defineQuoteApproval from "../modules/opportunity/model/quoteApproval.js";
+import defineLoanRequest from "../modules/finance/model/loanRequest.js";
+import defineLoanRequestMessage from "../modules/finance/model/loanRequestMessage.js";
+import defineCustomerPayment from "../modules/finance/model/customerPayment.js";
+import defineProject from "../modules/delivery/model/project.js";
+import defineJobSchedule from "../modules/delivery/model/jobSchedule.js";
+import defineInstallation from "../modules/delivery/model/installation.js";
 
 const db = { sequelize };
 
@@ -97,6 +111,30 @@ db.CollaborationAttachment = defineCollaborationAttachment(sequelize, DataTypes)
 db.CollaborationEvent = defineCollaborationEvent(sequelize, DataTypes);
 db.CollaborationSiteVisit = defineCollaborationSiteVisit(sequelize, DataTypes);
 
+// Activity log — who changed what, when, from where (modules/activity)
+db.ActivityLog = defineActivityLog(sequelize, DataTypes);
+
+// Equipment, suppliers, prices and supplier credit (modules/equipment)
+db.EquipmentCategory = defineEquipmentCategory(sequelize, DataTypes);
+db.Supplier = defineSupplier(sequelize, DataTypes);
+db.Equipment = defineEquipment(sequelize, DataTypes);
+db.EquipmentSupplierPrice = defineEquipmentSupplierPrice(sequelize, DataTypes);
+db.SupplierTransaction = defineSupplierTransaction(sequelize, DataTypes);
+
+// Lead assignment trail and quote approval (modules/opportunity)
+db.LeadAssignment = defineLeadAssignment(sequelize, DataTypes);
+db.QuoteApproval = defineQuoteApproval(sequelize, DataTypes);
+
+// Finance: loan requests and customer payments (modules/finance)
+db.LoanRequest = defineLoanRequest(sequelize, DataTypes);
+db.LoanRequestMessage = defineLoanRequestMessage(sequelize, DataTypes);
+db.CustomerPayment = defineCustomerPayment(sequelize, DataTypes);
+
+// Delivery: projects, job scheduling, installations (modules/delivery)
+db.Project = defineProject(sequelize, DataTypes);
+db.JobSchedule = defineJobSchedule(sequelize, DataTypes);
+db.Installation = defineInstallation(sequelize, DataTypes);
+
 Object.values(db)
     .filter((model) => typeof model?.associate === "function")
     .forEach((model) => model.associate(db));
@@ -142,6 +180,20 @@ export const {
     CollaborationAttachment,
     CollaborationEvent,
     CollaborationSiteVisit,
+    ActivityLog,
+    EquipmentCategory,
+    Supplier,
+    Equipment,
+    EquipmentSupplierPrice,
+    SupplierTransaction,
+    LeadAssignment,
+    QuoteApproval,
+    LoanRequest,
+    LoanRequestMessage,
+    CustomerPayment,
+    Project,
+    JobSchedule,
+    Installation,
 } = db;
 
 export { sequelize };

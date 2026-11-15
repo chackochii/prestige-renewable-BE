@@ -72,6 +72,10 @@ export const errorHandler = (err, req, res, next) => {
         success: false,
         message: expected ? err.message : "Internal server error",
         ...(err.errors ? { errors: err.errors } : {}),
+        // A machine-readable reason and its particulars, for client errors that
+        // carry them (e.g. DUPLICATE_LEAD with the matching leads). Never on a 500.
+        ...(expected && typeof err.code === "string" && /^[A-Z][A-Z0-9_]+$/.test(err.code) ? { code: err.code } : {}),
+        ...(expected && err.details ? { details: err.details } : {}),
     });
 };
 

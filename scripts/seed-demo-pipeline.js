@@ -817,7 +817,7 @@ const buildJob = async (job) => {
     const complete = leadQualification === "qualified" || chance(0.3);
     const actor = salesperson ? { id: salesperson.id, name: salesperson.name, roles: salesperson.roles } : ctx.people.admin;
 
-    const created = await createLead(leadPayload(ctx.unit, customer, { service, complete, qualification: leadQualification, salespersonId: salesperson?.id ?? null, createdAt, finance }), actor);
+    const created = await createLead(leadPayload(ctx.unit, customer, { service, complete, qualification: leadQualification, salespersonId: salesperson?.id ?? null, createdAt, finance }), actor, { skipDuplicateCheck: true });
     const opportunity = await Opportunity.findByPk(created.id);
     await note(opportunity.id, DEMO_NOTE, createdAt);
     if (salesperson) await note(opportunity.id, `Salesperson assigned: ${salesperson.name}`, plusDays(createdAt, 0.05), actor?.id);

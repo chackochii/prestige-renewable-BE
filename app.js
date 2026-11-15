@@ -4,6 +4,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import routes from "./routes/index.js";
 import errorHandler from "./middleware/errorHandler.js";
+import activitySource from "./middleware/activitySource.js";
 import { errorResponse } from "./utils/apiResponse.js";
 import { redactUrl } from "./utils/redact.js";
 import { sequelize } from "./config/db.js";
@@ -114,6 +115,8 @@ app.get("/health", async (req, res) => {
         clearTimeout(timer);
     }
 });
+// Who-and-where for the activity log: req.activity = { source, ip, userAgent }.
+app.use("/api", activitySource);
 app.use("/api", routes);
 
 app.use((req, res) => errorResponse(res, "Route not found", 404));

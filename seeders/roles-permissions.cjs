@@ -23,6 +23,7 @@ const ROLES = [
     ["BO", "Business Owner", "Overall governance and executive approval: full lead oversight, final approvals across estimation, procurement, construction, invoicing, warranty and system administration; co-approves price variations of 5% and above"],
     ["SMM", "Sales & Marketing Manager", "Marketing, pipeline and customer conversion: full lead management, creates and approves estimations, decides approvals; approves price variations below 5% and co-approves those of 5% and above"],
     ["SREP", "Sales Representative", "Lead capture and progression: creates and updates leads, read access across delivery so customers can be kept informed; no estimation authoring"],
+    ["SSREP", "Senior Sales Representative", "Senior sales: everything a sales representative does, plus approving quotations before they go to the customer and reassigning leads between representatives"],
     ["DEST", "Designer & Estimator", "Design and estimate integrity: prepares estimations and approval submissions; read access to leads, procurement and construction"],
     ["BOM", "Business Operations Manager", "Job administration and cross-functional coordination: runs approvals, procurement and warranty administration; manages and signs off construction & commissioning"],
     ["OPC", "Operations Coordinator", "Operational coordination: runs approvals, procurement, construction and warranty administration day-to-day (no construction sign-off)"],
@@ -85,6 +86,17 @@ const PERMISSIONS = MODULES.flatMap(([prefix, label]) =>
     // the ones reminded when nobody has taken a backup for 7 days. An export
     // takes customers' details out of the system.
     ["admin.export", "Export all job data to Excel (backups)", "System Administration"],
+    // Business operations (migration 20261114000004): equipment and pricing,
+    // supplier credit, finance applications, quote approval, the activity log.
+    ["pricing.cost.read", "View purchase prices and margins", "Equipment & Pricing"],
+    ["equipment.update", "Manage equipment, categories, suppliers and margins", "Equipment & Pricing"],
+    ["suppliers.credit.manage", "Maintain supplier credit limits and payment terms", "Equipment & Pricing"],
+    ["loans.create", "Create Finance & Loans", "Finance & Loans"],
+    ["loans.read", "View Finance & Loans", "Finance & Loans"],
+    ["loans.update", "Update Finance & Loans", "Finance & Loans"],
+    ["loans.delete", "Delete Finance & Loans", "Finance & Loans"],
+    ["quotes.approve", "Approve quotations before they go to the customer", "Estimation"],
+    ["activity.read", "View the activity log", "System Administration"],
 ]);
 
 const ALL = PERMISSIONS.map(([code]) => code);
@@ -107,6 +119,9 @@ const GRANTS = {
         ...of("admin", "read", "approve"),
         ...of("dashboards", "read"),
         "admin.export",
+        "pricing.cost.read", "equipment.update", "suppliers.credit.manage",
+        ...of("loans", "read", "update", "delete"),
+        "quotes.approve", "activity.read",
     ],
     SMM: [
         ...of("leads", "create", "read", "update", "delete", "approve"),
@@ -118,6 +133,9 @@ const GRANTS = {
         ...of("warranty", "read"),
         ...of("admin", "read"),
         ...of("dashboards", "read"),
+        "pricing.cost.read", "equipment.update", "suppliers.credit.manage",
+        ...of("loans", "create", "read", "update"),
+        "quotes.approve", "activity.read",
     ],
     SREP: [
         ...of("leads", "create", "read", "update"),
@@ -128,6 +146,20 @@ const GRANTS = {
         ...of("invoicing", "read"),
         ...of("warranty", "read"),
         ...of("dashboards", "read"),
+        ...of("loans", "create", "read"),
+    ],
+    // A senior rep: a rep's grants, plus reassigning leads and approving quotes.
+    SSREP: [
+        ...of("leads", "create", "read", "update", "approve"),
+        ...of("estimation", "read"),
+        ...of("approvals", "read"),
+        ...of("procurement", "read"),
+        ...of("construction", "read"),
+        ...of("invoicing", "read"),
+        ...of("warranty", "read"),
+        ...of("dashboards", "read"),
+        ...of("loans", "create", "read"),
+        "quotes.approve",
     ],
     DEST: [
         ...of("leads", "read"),
@@ -146,6 +178,7 @@ const GRANTS = {
         ...of("invoicing", "read"),
         ...of("warranty", "create", "read", "update"),
         ...of("dashboards", "read"),
+        "pricing.cost.read", "equipment.update", "suppliers.credit.manage", "loans.read", "activity.read",
     ],
     OPC: [
         ...of("leads", "read"),
@@ -176,6 +209,7 @@ const GRANTS = {
         ...of("construction", "read"),
         ...of("invoicing", "read"),
         ...of("dashboards", "read"),
+        "pricing.cost.read", "equipment.update",
     ],
     FIN: [
         ...of("leads", "read"),
@@ -185,6 +219,8 @@ const GRANTS = {
         ...of("invoicing", "create", "read", "update", "approve"),
         ...of("warranty", "read"),
         ...of("dashboards", "read"),
+        "pricing.cost.read", "suppliers.credit.manage",
+        ...of("loans", "read", "update", "delete"),
     ],
     QSM: [
         ...of("construction", "read"),
@@ -201,6 +237,7 @@ const GRANTS = {
         ...of("admin", "create", "read", "update", "delete", "approve"),
         ...of("dashboards", "read", "update"),
         "admin.export",
+        "pricing.cost.read", "equipment.update", "activity.read",
     ],
     HRM: [],
 };

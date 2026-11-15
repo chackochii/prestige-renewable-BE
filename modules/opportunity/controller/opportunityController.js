@@ -42,8 +42,17 @@ import {
 import * as quotes from "../service/quoteService.js";
 import { suggestQuote, applySuggestion } from "../service/quoteAiService.js";
 import { readEnergyBill } from "../service/energyBillService.js";
+import { recordActivity } from "../../activity/service/activityService.js";
+import db from "../../../models/index.js";
 import asyncHandler from "../../../utils/asyncHandler.js";
 import { successResponse, errorResponse } from "../../../utils/apiResponse.js";
+
+// Activity log for the record-level actions whose services do not log themselves.
+const logAction = (req, opportunity, action, meta = null) =>
+    recordActivity({
+        actor: req.user, ctx: req.activity, businessUnitId: opportunity?.businessUnitId ?? req.opportunityUnitId ?? null,
+        entityType: "lead", entityId: opportunity?.id ?? req.params.id, entityLabel: opportunity?.number ?? null, action, meta,
+    });
 
 export const getAll = asyncHandler(async (req, res) => {
     const { rows, total, page, pageSize, totals } = await listOpportunities(req.query, req.user);
@@ -58,20 +67,22 @@ export const getOne = asyncHandler(async (req, res) => {
 });
 
 export const create = asyncHandler(async (req, res) => {
-    const opportunity = await createLead(req.body, req.user);
+    const opportunity = await createLead(req.body, req.user, { ctx: req.activity });
 
     successResponse(res, { data: opportunity }, 201);
 });
 
 export const update = asyncHandler(async (req, res) => {
-    const opportunity = await updateLead(req.params.id, req.body, req.user);
+    const opportunity = await updateLead(req.params.id, req.body, req.user, req.activity);
 
     successResponse(res, { data: opportunity });
 });
 
 export const advance = asyncHandler(async (req, res) => {
     // { conditionsReviewed } — sending a job on from approvals confirms the conditions were read.
+    const from = await db.Opportunity.findByPk(req.params.id, { attributes: ["id", "stage"] });
     const opportunity = await advanceStage(req.params.id, req.user, { conditionsReviewed: req.body?.conditionsReviewed === true });
+    await logAction(req, opportunity, "stage_advanced", { fromStage: from?.stage ?? null, toStage: opportunity.stage });
 
     successResponse(res, { data: opportunity });
 });
@@ -82,7 +93,9 @@ export const estimationHandover = asyncHandler(async (req, res) => {
 });
 
 export const remove = asyncHandler(async (req, res) => {
+    const before = await db.Opportunity.findByPk(req.params.id, { attributes: ["id", "number", "businessUnitId"] });
     await deleteLead(req.params.id, req.user);
+    await logAction(req, before, "deleted");
 
     successResponse(res, { message: "Lead deleted successfully" });
 });
@@ -189,7 +202,7 @@ export const downloadDocument = asyncHandler(async (req, res) => {
 // Each returns the refreshed opportunity.
 
 export const setSalesperson = asyncHandler(async (req, res) => {
-    await assignSalesperson(req.params.id, req.body, req.user);
+    await assignSalesperson(req.params.id, req.body, req.user, req.activity);
     const opportunity = await getOpportunity(req.params.id);
 
     successResponse(res, { data: opportunity });
@@ -198,6 +211,7 @@ export const setSalesperson = asyncHandler(async (req, res) => {
 export const setEstimator = asyncHandler(async (req, res) => {
     await assignEstimator(req.params.id, req.body, req.user);
     const opportunity = await getOpportunity(req.params.id);
+    await logAction(req, opportunity, "estimator_assigned", { estimatorId: opportunity.estimatorId, estimator: opportunity.estimator?.name ?? null });
 
     successResponse(res, { data: opportunity });
 });
@@ -205,6 +219,7 @@ export const setEstimator = asyncHandler(async (req, res) => {
 export const setCoordinator = asyncHandler(async (req, res) => {
     await assignCoordinator(req.params.id, req.body, req.user);
     const opportunity = await getOpportunity(req.params.id);
+    await logAction(req, opportunity, "coordinator_assigned", { operationalCoordinatorId: opportunity.operationalCoordinatorId, coordinator: opportunity.operationalCoordinator?.name ?? null });
 
     successResponse(res, { data: opportunity });
 });

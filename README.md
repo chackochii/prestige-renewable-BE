@@ -189,7 +189,11 @@ All application code (`server.js`, `app.js`, models, routes) uses `import`/`expo
 | Pipeline | `opportunities` (stages 1–11: Leads & marketing → Estimation → Proposal → (4 retired) → Approvals → Procurement & delivery → Construction → Invoicing & payments → Warranty registration → Referrals & feedback → DLP / O&M; see `stageAccess.js`) |
 | Quoting | `estimates`, `estimate_options`, `proposals`, `variations` |
 | Delivery | `approvals`, `purchase_orders`, `site_work_substages`, `rebates` |
-| Billing & system | `billing_requests`, `documents`, `audit_logs`, `notifications` |
+| Billing & system | `billing_requests`, `documents`, `audit_logs`, `notifications`, `activity_logs` |
+| Leads & quotes (Nov 2026) | `lead_assignments`, `quote_approvals` |
+| Equipment & suppliers | `equipment_categories`, `equipment`, `equipment_supplier_prices`, `suppliers`, `supplier_transactions` |
+| Finance | `loan_requests`, `loan_request_messages`, `customer_payments` |
+| Operations | `projects`, `job_schedules`, `installations` |
 
 All tables use UUID primary keys, snake_case columns, and foreign keys with cascade rules. Sequelize models live in `modules/<name>/model/` and are registered with their associations in `models/index.js`.
 
@@ -536,6 +540,93 @@ The estimator's workflow state lives on the opportunity (`estimation*` fields, r
 Quote totals and GST are derived by the client from items and costs; the API stores no totals. Every assignment, hold, confirmation and notification writes a `system` entry to the job history. `POST /:id/assign-coordinator` accepts `leads.update` **or** `estimation.update` because both screens use it.
 
 - **Qualification:** new leads default to `nurture`. Setting `qualification: "qualified"` (the "Potential client" decision) requires the checklist to be complete — see "The lead checklist" above for all 17 rows. `disqualified` requires `notPotentialReason`. Leaving stage 1 additionally needs an estimator (`POST /:id/advance`).
+
+## Business operations (Nov 2026)
+
+Migrations `20261114000001`–`20261114000005`. Run `npm run db:migrate`, and on a brand-new database `npm run db:seed` afterwards as usual. Everything below is **additive**: existing endpoints keep their request and response shapes, so the current frontend works unchanged. The two behaviour changes the current screens will notice are the lead-assignment rule and the duplicate-lead check, both of which answer with a readable `message` the screens already display.
+
+### Switches (`.env`)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LEAD_DUPLICATE_CHECK` | `block` | `block` refuses a staff-entered lead whose phone or email matches an active lead in the unit (409 `DUPLICATE_LEAD`); `warn` creates it and returns `duplicateWarnings`; `off` skips the check. Inbound and public-form leads keep their own handling. |
+| `QUOTE_APPROVAL_REQUIRED` | unset | `true` makes every unit refuse to send a quote version that a Senior Sales Representative has not approved. Per unit: `business_units.metadata.quoteApprovalRequired = true`. Off by default so proposals keep sending until the approval screens ship. |
+| `EQUIPMENT_DEFAULT_MARGIN_PCT` | `20` | The margin applied to equipment without one of its own. |
+| `PIN_SETUP_TOKEN_EXPIRES_IN` | `30m` | How long the token from a temporary-PIN login lasts. |
+
+### Permissions and roles
+
+New codes, editable on the roles screen like the rest: `pricing.cost.read` (purchase prices and margins — management and procurement; sales sees the sales price list only), `equipment.update`, `suppliers.credit.manage`, `loans.create|read|update|delete`, `quotes.approve`, `activity.read`. New role **SSREP — Senior Sales Representative**: a sales representative's grants plus `leads.approve` (reassign leads, override a duplicate) and `quotes.approve`. On an existing database the migration copies SREP's current grants (pages included) to SSREP.
+
+### Users: temporary PINs
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `POST` | `/api/users` | as before; `password` becomes optional when `temporaryPin` (4–8 digits) or `issuePin: true` is sent → `{ data, temporaryPin }` (returned once) |
+| `POST` | `/api/users/login` | `{ email, password }` or `{ email, pin }` → `{ token, user, mustChangePin }`. With a temporary PIN the token only opens `GET /users/me` and `POST /users/me/pin` |
+| `POST` | `/api/users/me/pin` | `{ pin, currentPin? \| currentPassword? }` → `{ token, user }` — a full session. Repeated or sequential PINs are refused |
+| `POST` | `/api/users/:id/pin/reset` | `admin.update` — `{ temporaryPin? }` → a new temporary PIN |
+| `DELETE` | `/api/users/:id/pin` | `admin.update` — password-only sign-in (refused when the user has no password) |
+
+`/users/me` and the login payload also carry `hasPin`, `mustChangePin`, `pinSetAt`. Hashes are never returned.
+
+### Activity log
+
+`GET /api/activity` (`activity.read`) — `?businessUnitId=&entityType=&entityId=&actorId=&action=&source=&from=&to=&search=&page=&pageSize=`, newest first; `GET /api/activity/entities/:type/:id` for one record. Each row: who (`actor`), when (`at`), the source (`web` for a browser, `api` otherwise, or the `X-Client-Source` header; `public`, `webhook`, `system` for those paths), the IP, and `changes: { field: { from, to } }`. Written by leads (create, edit, stage, assignments), users (create, edit, PIN and password events, logins), equipment, categories, suppliers, credit, loans, payments, projects, jobs, installations and quote approvals. A failed log write never fails the change.
+
+### Lead management
+
+| Method | Route | Permission | Body → returns |
+|---|---|---|---|
+| `POST` | `/api/opportunities/intake` | `leads.create` | `{ businessUnitId, firstName, lastName, address (string or { line1, suburb, state, postcode }), phone, email, salespersonId \| unassignedReason, …lead fields, allowDuplicate? }` → the lead, assigned. Every missing mandatory field is listed in `errors` |
+| `GET` | `/api/opportunities/duplicates` | `leads.read` | `?businessUnitId=&phone=&email=&excludeId=` → active leads sharing either |
+| `POST` | `/api/opportunities/:id/reassign-salesperson` | `leads.approve` | `{ salespersonId, reason }` |
+| `GET` | `/api/opportunities/:id/assignments` | read | `{ current, assignedAt, history: [{ kind, from, to, by, reason, at }] }` |
+
+**One lead, one representative.** Once assigned, moving a lead to another representative — through `assign-salesperson`, `PATCH /:id` or the reassign endpoint — needs `leads.approve`; anyone else gets 409 `LEAD_ALREADY_ASSIGNED`: *"This lead has already been assigned to [name]. Please check the existing assignment before proceeding."* **Duplicates** are matched on phone (last nine digits, so `0412 345 678` = `+61 412-345-678`) and email (case ignored), never the name; the 409 `DUPLICATE_LEAD` carries the matches in `details.duplicates`. An edit only re-checks contact details that actually changed. The older `POST /api/opportunities` keeps its looser required fields (what the current form sends).
+
+### Quote approval (Senior Sales Representative)
+
+| Method | Route | Permission | Body → returns |
+|---|---|---|---|
+| `POST` | `/api/opportunities/:id/quote-approvals` | `leads.update` / `estimation.update` | `{ quoteVersionId?, note? }` → `pending`, or `resubmitted` after a rejection (the note — what changed — is then required) |
+| `POST` | `/api/opportunities/:id/quote-approvals/:approvalId/decision` | `quotes.approve` | `{ outcome: approved \| rejected, comments }` — comments required to reject; nobody approves their own submission |
+| `GET` | `/api/opportunities/:id/quote-approvals` | read | `{ required, items }` — approver, date/time and comments kept |
+| `GET` | `/api/quote-approvals` | `quotes.approve` (or sales) | the queue: `?businessUnitId=&status=pending\|resubmitted\|approved\|rejected\|all&mine=1` |
+
+Quote versions now carry `approvalStatus`. Where approval is required, `POST /:id/proposals` answers 409 `QUOTE_APPROVAL_REQUIRED` for a version that is not approved.
+
+### Equipment, categories, suppliers and supplier credit
+
+| Route | Notes |
+|---|---|
+| `GET /api/equipment`, `GET /api/equipment/:id` | everyone signed in; `cost`, `marginPct`, `suppliers[]` only with `pricing.cost.read`. `?categoryId=&kind=&supplierId=&search=&includeInactive=&unpriced=` |
+| `GET /api/equipment/price-list` | the sales price list by category (ex and inc GST) |
+| `POST/PATCH/DELETE /api/equipment[/:id]`, `PATCH /:id/margin`, `POST /:id/suppliers`, `PUT/DELETE /:id/suppliers/:supplierId` | `equipment.update`. Cost = preferred supplier's price (else the lowest); sales price = cost × (1 + margin) unless `salesPriceOverride`; each price keeps its history |
+| `/api/equipment-categories` | `GET` (with `itemCount`), `POST`, `PATCH` (rename), `POST /:id/deactivate`, `POST /:id/reactivate`, `DELETE` (409 while items remain). IDs `CAT-001…` |
+| `/api/suppliers` | contacts: `equipment.update`; `PATCH /:id/credit` (limit, terms): `suppliers.credit.manage` |
+| `GET /api/suppliers/credit`, `GET /api/suppliers/:id/credit` | `pricing.cost.read` — limit, outstanding, available, overdue (payments applied oldest-due first), next due |
+| `POST /api/suppliers/:id/transactions` | procurement (`procurement.update`) — `{ kind: purchase\|payment\|credit_note, amount, reference?, transactedAt?, dueAt?, … }`; a purchase falls due after the payment terms; going over the limit warns and notifies |
+| `POST /api/suppliers/:id/remind` | notifies procurement and finance; a daily pass also reminds them of overdue and over-limit accounts |
+
+### Finance
+
+| Route | Notes |
+|---|---|
+| `/api/loan-requests` | `POST` (`loans.create`) `{ opportunityId, loanAmount, financier?, termMonths?, … }` — customer, lead ID, rep and date from the lead, one open per job. `GET` (`loans.read`; a rep sees their own). `POST /:id/review` (`loans.update`) `{ status: under_review\|more_info\|approved\|declined\|withdrawn, comments?, financierReference?, financierResponse? }`. `POST /:id/messages` `{ body }` (finance ↔ rep). `POST /:id/attachments` (multipart — the financier's response, stored on the job). `DELETE /:id` (`loans.delete`) |
+| `/api/customer-payments` | `invoicing.*` — `{ opportunityId, description, amountEx \| amountInc, gstRatePct?, dueAt?, … }`; GST worked out both ways; `POST /:id/receipts` `{ amount, method?, reference? }` (overpaying refused); status unpaid → partial → paid, or overdue past the due date; list `totals` = owed ex/inc GST, received, balance, overdue |
+
+### Projects, job scheduling, completed installations
+
+| Route | Notes |
+|---|---|
+| `/api/projects` | opened automatically when the customer accepts the proposal (and backfilled for jobs already at Approvals or later). `PATCH /:id` (`construction.update` / `procurement.update` / `approvals.update`): status, payment type (cash \| loan, linked loan request), installation status and %, procurement status, rep, owner. `GET /:id` adds the approvals (live), documents, signed quote, jobs, installations, payments and purchase orders |
+| `/api/jobs` | `GET /routing` — installation, electrical, commissioning → crew; site inspection → operations; delivery → procurement; maintenance, service call, warranty → O&M. `POST` `{ title, jobType, scheduledStart, scheduledEnd?, opportunityId?, assigneeId? }` — the assignee must be on the team; the team is notified. `POST /:id/assign`, `POST /:id/status` (the crew can move its own jobs on) |
+| `/api/installations` | `POST` (`construction.update`) `{ opportunityId, installationDate?, jobScheduleId?, signedQuoteVersionId?, paymentMethod?, invoiceStatus?, … }` — signed quote defaults to the accepted proposal's, payment method to the project's; completes the project's installation and tells finance. `PATCH` (finance) sets the invoice status |
+
+### Dashboard and team view previews
+
+`GET /api/dashboard?businessUnitId=` (`dashboards.read`) — sections for leads (by stage, new, unassigned, past SLA, pipeline value), quote approvals, loans, jobs, projects, installations, finance (customer payments and billing), suppliers (credit), pricing and recent activity; each appears only for callers who can read that area. `GET /api/dashboard/views/procurement` and `/views/operations` `?businessUnitId=` — what that team's screens hold plus the team's roles and permissions; open to management (`admin.read`) and the team itself.
 
 ## Project structure
 

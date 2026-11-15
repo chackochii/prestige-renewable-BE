@@ -21,6 +21,8 @@ import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteS
 import { advancePermissionFor, isStageNumber, LAST_STAGE, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 import { pagingOf } from "../../../utils/pagination.js";
 import { unitYear2 } from "../../../utils/unitTime.js";
+import { assertMayChangeSalesperson, canReassign, duplicateError, duplicateMode, findDuplicateLeads, recordAssignment } from "./leadAssignmentService.js";
+import { diff, recordActivity } from "../../activity/service/activityService.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
 
@@ -477,7 +479,16 @@ const assertQualificationConsistent = (fields) => {
 // `inbound` = { id, source }: the inbound_leads row being converted (modules/
 // lead/service/inboundLeadService). The source is then the platform — one of
 // the automated values nobody can pick by hand — and the record points back.
-export const createLead = async (payload = {}, actor, { findDuplicate = null, inbound = null } = {}) => {
+//
+// Staff-entered leads are checked for duplicates by phone and email
+// (leadAssignmentService.findDuplicateLeads) inside the same transaction, so
+// two creates at once cannot both slip through. LEAD_DUPLICATE_CHECK=block
+// (default) refuses a duplicate unless an authorised user (leads.approve)
+// sends allowDuplicate: true; warn creates it and reports the matches as
+// `duplicateWarnings`; off skips the check. Inbound and public-form leads keep
+// their own duplicate handling.
+// `skipDuplicateCheck` is for internal scripts only (the demo pipeline), never a request.
+export const createLead = async (payload = {}, actor, { findDuplicate = null, inbound = null, ctx = null, skipDuplicateCheck = false } = {}) => {
     const unit = await BusinessUnit.findByPk(parseId(payload.businessUnitId, "business unit id"));
     if (!unit) throw httpError(404, "Business unit not found");
 
@@ -501,12 +512,23 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null, in
 
     const slaDays = Number(unit.slaDays?.[1] ?? 3);
     const now = new Date();
+    const checkDuplicates = !inbound && !findDuplicate && !skipDuplicateCheck && duplicateMode() !== "off";
+    const mayOverride = checkDuplicates && payload.allowDuplicate === true && (await canReassign(actor));
+    let duplicateWarnings = null;
     // Lock, number and insert in one transaction so concurrent creates in the
     // same unit queue up and each gets a distinct number.
     const opportunity = await sequelize.transaction(async (transaction) => {
         await lockNumbering(unit, transaction);
         const duplicate = findDuplicate ? await findDuplicate(transaction) : null;
         if (duplicate) throw Object.assign(httpError(409, `This lead already exists as ${duplicate.number}`), { duplicate });
+        if (checkDuplicates) {
+            const matches = await findDuplicateLeads(
+                { businessUnitId: unit.id, phone: fields.customerPhone, email: fields.customerEmail, contactPhone: fields.contactPhone, contactEmail: fields.contactEmail },
+                { transaction }
+            );
+            if (matches.length && duplicateMode() === "block" && !mayOverride) throw duplicateError(matches);
+            if (matches.length) duplicateWarnings = matches;
+        }
         return Opportunity.create(
             {
                 ...fields,
@@ -523,16 +545,42 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null, in
             { transaction }
         );
     });
-    return getOpportunity(opportunity.id);
+    if (opportunity.salespersonId) await recordAssignment(opportunity, { toId: opportunity.salespersonId, reason: "Assigned when the lead was created" }, actor, ctx);
+    await recordActivity({
+        actor, ctx, source: inbound ? "webhook" : findDuplicate ? "public" : null, businessUnitId: opportunity.businessUnitId,
+        entityType: "lead", entityId: opportunity.id, entityLabel: opportunity.number, action: "created",
+        meta: { leadSource: opportunity.leadSource, ...(duplicateWarnings ? { duplicateOf: duplicateWarnings.map((d) => d.number), overridden: mayOverride } : {}) },
+    });
+    const created = await getOpportunity(opportunity.id);
+    if (duplicateWarnings) created.duplicateWarnings = duplicateWarnings;
+    return created;
 };
 
 // Lead details stay editable after the record moves on (matching the
 // prototype); stage progression itself will be a separate, guarded action.
-export const updateLead = async (id, payload = {}, actor) => {
+export const updateLead = async (id, payload = {}, actor, ctx = null) => {
     const opportunity = await Opportunity.findByPk(parseId(id, "opportunity id"));
     if (!opportunity) throw httpError(404, "Opportunity not found");
+    const before = { ...opportunity.get({ plain: true }) }; // a copy: without includes Sequelize hands back the live dataValues
 
     const fields = pickLeadFields(payload);
+    // One representative per lead: a change of salesperson on an assigned lead
+    // is a reassignment, for authorised users only (leadAssignmentService).
+    if (fields.salespersonId !== undefined) await assertMayChangeSalesperson(opportunity, fields.salespersonId === "" ? null : fields.salespersonId, actor);
+    // New contact details are checked against the unit's other active leads —
+    // only when they actually change, so saving an old record is never refused.
+    const CONTACT_KEYS = ["customerPhone", "customerEmail", "contactPhone", "contactEmail"];
+    const contactChanged = CONTACT_KEYS.some((key) => fields[key] !== undefined && String(fields[key] ?? "").trim() !== String(opportunity[key] ?? "").trim());
+    let duplicateWarnings = null;
+    if (contactChanged && duplicateMode() !== "off") {
+        const changed = Object.fromEntries(CONTACT_KEYS.map((key) => [key, fields[key] !== undefined && String(fields[key] ?? "").trim() !== String(opportunity[key] ?? "").trim() ? fields[key] : null]));
+        const matches = await findDuplicateLeads({
+            businessUnitId: opportunity.businessUnitId, phone: changed.customerPhone, email: changed.customerEmail,
+            contactPhone: changed.contactPhone, contactEmail: changed.contactEmail, excludeId: opportunity.id,
+        });
+        if (matches.length && duplicateMode() === "block" && !(payload.allowDuplicate === true && (await canReassign(actor)))) throw duplicateError(matches);
+        if (matches.length) duplicateWarnings = matches;
+    }
     if (fields.customerLegalName !== undefined && !fields.customerLegalName?.trim())
         throw httpError(400, "customerLegalName cannot be blank");
     // The optional checklist rows are merged, never replaced: sales and the
@@ -578,6 +626,16 @@ export const updateLead = async (id, payload = {}, actor) => {
 
     await opportunity.update(fields);
 
+    if (fields.salespersonId !== undefined && Number(before.salespersonId || 0) !== Number(opportunity.salespersonId || 0))
+        await recordAssignment(opportunity, { fromId: before.salespersonId, toId: opportunity.salespersonId, reason: payload.reassignReason ?? null }, actor, ctx);
+    const changes = diff(before, opportunity.get({ plain: true }), Object.keys(fields).filter((key) => key !== "leadEditedAt" && key !== "salespersonId"));
+    if (changes)
+        await recordActivity({
+            actor, ctx, businessUnitId: opportunity.businessUnitId, entityType: "lead", entityId: opportunity.id, entityLabel: opportunity.number,
+            action: changes.lifecycle ? `lifecycle_${String(opportunity.lifecycle).toLowerCase()}` : "updated", changes,
+            ...(duplicateWarnings ? { meta: { duplicateOf: duplicateWarnings.map((d) => d.number) } } : {}),
+        });
+
     // Closing a record (won, lost, or closed out) is news for everyone working
     // on it — a field edit is not.
     if (fields.lifecycle && fields.lifecycle !== lifecycleWas && fields.lifecycle !== "Active")
@@ -590,7 +648,9 @@ export const updateLead = async (id, payload = {}, actor) => {
             actor,
         });
 
-    return getOpportunity(opportunity.id);
+    const updated = await getOpportunity(opportunity.id);
+    if (duplicateWarnings) updated.duplicateWarnings = duplicateWarnings;
+    return updated;
 };
 
 // Move to the next stage the unit runs (disabled stages are skipped, never

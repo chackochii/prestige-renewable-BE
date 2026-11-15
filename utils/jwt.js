@@ -35,3 +35,13 @@ export const signStreamToken = (user) =>
     });
 
 export const verifyToken = (token) => jwt.verify(token, secret());
+
+// A token that can only finish setting up a PIN: issued when someone signs in
+// with the temporary PIN an administrator gave them. It opens GET /users/me
+// and POST /users/me/pin (which answers with a full session token) and nothing
+// else — tokenValidator refuses it on every other route.
+export const PIN_SETUP_SCOPE = "pin_setup";
+export const signPinSetupToken = (user) =>
+    jwt.sign({ sub: String(user.id), scope: PIN_SETUP_SCOPE }, secret(), {
+        expiresIn: process.env.PIN_SETUP_TOKEN_EXPIRES_IN || "30m",
+    });

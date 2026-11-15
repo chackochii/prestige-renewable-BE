@@ -16,6 +16,8 @@ import { assignedUserIds, customerLabel } from "../../opportunity/service/opport
 import { overdueRequests, requestLabel } from "../../collaboration/service/collaborationService.js";
 import { remindPendingApprovals } from "../../opportunity/service/procurementService.js";
 import { runBackupReminderCheck } from "../../export/service/backupReminder.js";
+import { runSupplierCreditCheck } from "../../equipment/service/supplierCreditService.js";
+import { runCustomerPaymentOverdueCheck } from "../../finance/service/customerPaymentService.js";
 
 const { Opportunity, BusinessUnit } = db;
 
@@ -124,7 +126,11 @@ export const startSlaWatcher = () => {
                 (await runSlaCheck()) +
                 (await runOverdueRequestCheck()) +
                 (await remindPendingApprovals()) +
-                (await runBackupReminderCheck());
+                (await runBackupReminderCheck()) +
+                // Supplier accounts overdue or over their limit, and customer
+                // payments past due — once a day per person (dedupe keys).
+                (await runSupplierCreditCheck()) +
+                (await runCustomerPaymentOverdueCheck());
             if (raised) logger.info(`SLA watcher: ${raised} overdue notification(s) raised`);
         } catch (err) {
             // A laptop that slept, a dropped VPN, a database that is briefly

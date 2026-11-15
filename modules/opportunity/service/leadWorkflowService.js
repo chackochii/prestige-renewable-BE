@@ -6,6 +6,7 @@ import db from "../../../models/index.js";
 import { parseId } from "../../../utils/ids.js";
 import { SUPER_ROLE_CODE } from "../../role/service/roleService.js";
 import { notify } from "../../notification/service/notificationService.js";
+import { assertMayChangeSalesperson, canReassign, recordAssignment } from "./leadAssignmentService.js";
 
 const { Opportunity, OpportunityHistory, User, UserBusinessUnit, BusinessUnit } = db;
 
@@ -96,25 +97,54 @@ const isBlank = (value) => value === undefined || value === null || String(value
  * { salespersonId: number | null, reason? } — leaving the lead unassigned
  * needs a reason, which is kept on the record (unassignedReason).
  */
-export const assignSalesperson = async (id, payload = {}, actor) => {
+//
+// A lead already assigned to one representative cannot be given to another
+// (or left without one) except by an authorised user — leads.approve; anyone
+// else gets 409 "This lead has already been assigned to <name>. …". Every
+// change is kept in the assignment trail (GET /:id/assignments).
+export const assignSalesperson = async (id, payload = {}, actor, ctx = null) => {
     const opportunity = await loadOpportunity(id);
+    const previousId = opportunity.salespersonId;
     if (isBlank(payload.salespersonId)) {
         const reason = String(payload.reason ?? "").trim();
         if (!reason) throw httpError(400, "Give a reason when leaving the lead without a salesperson");
         if (reason.length > 2000) throw httpError(400, "reason is too long");
+        await assertMayChangeSalesperson(opportunity, null, actor);
         const changed = opportunity.salespersonId !== null;
         await opportunity.update({ salespersonId: null, unassignedReason: reason });
-        if (changed) await recordSystemEvent(opportunity, "Salesperson unassigned", actor);
+        if (changed) {
+            await recordSystemEvent(opportunity, `Salesperson unassigned — ${reason}`, actor);
+            await recordAssignment(opportunity, { fromId: previousId, toId: null, reason }, actor, ctx);
+        }
         return opportunity.id;
     }
     const user = await assertAssignable(payload.salespersonId, opportunity, "salesperson");
+    await assertMayChangeSalesperson(opportunity, user.id, actor);
     const changed = opportunity.salespersonId !== user.id;
     await opportunity.update({ salespersonId: user.id, unassignedReason: null });
     if (changed) {
-        await recordSystemEvent(opportunity, `Salesperson assigned: ${user.name}`, actor);
+        const reason = isBlank(payload.reason) ? null : String(payload.reason).trim().slice(0, 2000);
+        const previous = previousId ? await User.findByPk(previousId, { attributes: ["id", "name"], paranoid: false }) : null;
+        await recordSystemEvent(
+            opportunity,
+            previous ? `Salesperson reassigned: ${previous.name} → ${user.name}${reason ? ` — ${reason}` : ""}` : `Salesperson assigned: ${user.name}`,
+            actor
+        );
+        await recordAssignment(opportunity, { fromId: previousId, toId: user.id, reason }, actor, ctx);
         await notifyAssignee(opportunity, { event: "assignment.salesperson", user, role: "Salesperson" }, actor);
     }
     return opportunity.id;
+};
+
+/**
+ * The deliberate transfer: { salespersonId, reason } by an authorised user
+ * (leads.approve). The reason is required — it is what the trail is for.
+ */
+export const reassignSalesperson = async (id, payload = {}, actor, ctx = null) => {
+    if (!(await canReassign(actor))) throw httpError(403, "Only an authorised user (leads.approve) can reassign a lead");
+    if (isBlank(payload.salespersonId)) throw httpError(400, "salespersonId is required");
+    if (isBlank(payload.reason)) throw httpError(400, "Give the reason for the reassignment");
+    return assignSalesperson(id, { salespersonId: payload.salespersonId, reason: payload.reason }, actor, ctx);
 };
 
 /** { estimatorId } */

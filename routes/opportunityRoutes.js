@@ -52,6 +52,7 @@ import * as proposals from "../modules/opportunity/controller/proposalController
 import * as approvals from "../modules/opportunity/controller/approvalsController.js";
 import * as procurement from "../modules/opportunity/controller/procurementController.js";
 import * as dataExport from "../modules/export/controller/exportController.js";
+import * as leadManagement from "../modules/opportunity/controller/leadManagementController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -94,6 +95,15 @@ router.get("/procurement", requirePermission("procurement.read"), requireUnitAcc
 // filter it is a full backup and resets the 7-day reminder.
 router.get("/export", requirePermission("admin.export"), requireUnitAccess((req) => req.query.businessUnitId), dataExport.exportMany); // ?businessUnitId=&stage=&lifecycle=&from=&to= → .xlsx
 router.get("/export/backups", requirePermission("admin.export"), dataExport.backups); // → { reminderDays, units: [{ id, name, jobCount, lastBackup, daysSince, due }] } — the caller's units
+
+// Lead management. Both are mounted before the /:id scope below so "intake"
+// and "duplicates" are never read as opportunity ids.
+//  - intake: create a lead with the mandatory details (first name, last name,
+//    address, phone, email) and assign it to a sales representative in one
+//    call; duplicates by phone/email are refused (leadIntakeService).
+//  - duplicates: check contact details against the unit's active leads.
+router.post("/intake", requirePermission("leads.create"), requireUnitAccess((req) => req.body?.businessUnitId), leadManagement.intake); // { firstName, lastName, address, phone, email, salespersonId | unassignedReason, businessUnitId, …lead fields, allowDuplicate? }
+router.get("/duplicates", read, requireUnitAccess((req) => req.query.businessUnitId), leadManagement.duplicates); // ?businessUnitId=&phone=&email=&excludeId= → { data: [lead], duplicate }
 
 // Deny-by-default unit scoping (ADM excepted): a caller only reaches records
 // in the business units they are assigned to. Every /:id/... route below is
@@ -183,7 +193,12 @@ router.post("/:id/documents", requireAnyPermission("leads.update", "estimation.u
 router.delete("/:id/documents/:docId", requireAnyPermission("leads.update", "estimation.update"), deleteDocument);
 
 // Role assignments — discrete, audited actions (each writes a history entry).
+// A lead already assigned cannot be moved to another representative except by
+// an authorised user (leads.approve) — 409 "This lead has already been
+// assigned to …" otherwise. Every change is kept in the assignment trail.
 router.post("/:id/assign-salesperson", write, setSalesperson); // { salespersonId | null, reason? }
+router.post("/:id/reassign-salesperson", requirePermission("leads.approve"), leadManagement.reassign); // { salespersonId, reason } — the deliberate transfer
+router.get("/:id/assignments", readAny, leadManagement.assignments); // → { current, assignedAt, history: [{ kind, from, to, by, reason, at }] }
 router.post("/:id/assign-estimator", write, setEstimator); // { estimatorId }
 // Shared by the lead pack and the estimation screen.
 router.post("/:id/assign-coordinator", requireAnyPermission("leads.update", "estimation.update"), setCoordinator); // { operationalCoordinatorId }
@@ -217,6 +232,15 @@ router.post("/:id/collaboration/requests", readAny, collaboration.create); // { 
 // versions generated from it: each a frozen snapshot of the quote as issued.
 // A quote is a draft (editable) until it is generated, then locked; a new
 // quote (POST /quote/draft) opens a pre-filled draft again.
+// Quote approval: a Senior Sales Representative approves every quote version
+// before it goes to the customer (quoteApprovalService). Sales or estimation
+// submits; quotes.approve holders decide. Sending is blocked until approval
+// only where the unit requires it (metadata.quoteApprovalRequired or
+// QUOTE_APPROVAL_REQUIRED=true).
+router.get("/:id/quote-approvals", readAny, leadManagement.listQuoteApprovals); // → { required, items: [...] }
+router.post("/:id/quote-approvals", requireAnyPermission("leads.update", "estimation.update"), leadManagement.submitQuoteApproval); // { quoteVersionId?, note? } — note required on a resubmission
+router.post("/:id/quote-approvals/:approvalId/decision", requirePermission("quotes.approve"), leadManagement.decideQuoteApproval); // { outcome: approved|rejected, comments } — comments required to reject
+
 router.get("/:id/quote/versions", readAny, getQuoteVersions);
 router.post("/:id/quote/versions", estimate, createQuoteVersion); // { snapshot, quoteNumber?, grandTotal? } → the version (+ `quote`, now generated); 409 once generated
 router.post("/:id/quote/draft", estimate, startQuoteDraft); // → the quote, a draft again (409 unless generated)

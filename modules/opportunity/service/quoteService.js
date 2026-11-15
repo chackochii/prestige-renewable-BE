@@ -15,6 +15,7 @@ import { unitDate } from "../../../utils/unitTime.js";
 import { PROJECT_TYPES, TAX_TREATMENTS } from "../model/quote.js";
 import { COST_CALC_TYPES, COST_KINDS } from "../model/quoteCost.js";
 import { recordSystemEvent } from "./leadWorkflowService.js";
+import { statusByVersion } from "./quoteApprovalService.js";
 
 const { Opportunity, BusinessUnit, Quote, QuoteItem, QuoteCost, QuoteVersion, CatalogItem, User, sequelize } = db;
 
@@ -400,7 +401,9 @@ export const listVersions = async (id) => {
         include: [VERSION_CREATOR],
         order: [["version", "DESC"], ["id", "DESC"]],
     });
-    return rows.map(presentVersion);
+    // Each version's Senior Sales approval status (null = never submitted) — quoteApprovalService.
+    const approvals = await statusByVersion(rows.map((row) => row.id));
+    return rows.map((row) => ({ ...presentVersion(row), approvalStatus: approvals.get(row.id) ?? null }));
 };
 
 /**

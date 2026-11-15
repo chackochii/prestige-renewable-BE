@@ -35,22 +35,23 @@ const PAGES = [
 
 // Default role grants per page permission — a page is granted to every role
 // with read access in the matching matrix module (Sydpro RACI, Sep 2026).
-// ADM is not listed: it bypasses permission checks in code.
+// ADM is not listed: it bypasses permission checks in code. The Senior Sales
+// Representative (SSREP) sees what a Sales Representative sees.
 const GRANTS = {
-    "page.leads.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "FIN"],
-    "page.pipeline.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "FIN"],
+    "page.leads.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "FIN"],
+    "page.pipeline.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "FIN"],
     // Proposals are sales work with estimation behind them — the pipeline audience.
-    "page.proposals.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "FIN"],
+    "page.proposals.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "FIN"],
     "page.marketing.view": ["BO", "SMM"],
-    "page.approvals.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "PROC", "FIN"],
-    "page.procurement.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "SITEOM", "CREW", "PROC", "FIN"],
-    "page.construction.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "SITEOM", "CREW", "PROC", "QSM", "OMM"],
-    "page.quotes.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "PROC", "FIN"],
+    "page.approvals.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "PROC", "FIN"],
+    "page.procurement.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "SITEOM", "CREW", "PROC", "FIN"],
+    "page.construction.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "SITEOM", "CREW", "PROC", "QSM", "OMM"],
+    "page.quotes.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "PROC", "FIN"],
     "page.costs.view": ["BO", "SMM", "DEST", "BOM", "OPC", "PROC", "FIN"],
-    "page.billing.view": ["BO", "SMM", "SREP", "BOM", "OPC", "PROC", "FIN"],
-    "page.warranty.view": ["BO", "SMM", "SREP", "BOM", "OPC", "SITEOM", "CREW", "FIN", "QSM", "OMM"],
-    "page.referrers.view": ["BO", "SMM", "SREP"],
-    "page.dashboards.view": ["BO", "SMM", "SREP", "DEST", "BOM", "OPC", "SITEOM", "PROC", "FIN", "QSM", "OMM", "SYS"],
+    "page.billing.view": ["BO", "SMM", "SREP", "SSREP", "BOM", "OPC", "PROC", "FIN"],
+    "page.warranty.view": ["BO", "SMM", "SREP", "SSREP", "BOM", "OPC", "SITEOM", "CREW", "FIN", "QSM", "OMM"],
+    "page.referrers.view": ["BO", "SMM", "SREP", "SSREP"],
+    "page.dashboards.view": ["BO", "SMM", "SREP", "SSREP", "DEST", "BOM", "OPC", "SITEOM", "PROC", "FIN", "QSM", "OMM", "SYS"],
     "page.admin.view": ["BO", "SMM", "SYS"], // read access; management stays permission-gated in the pages themselves
 };
 

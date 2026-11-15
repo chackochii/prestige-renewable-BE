@@ -78,6 +78,35 @@ export const NOTIFICATION_EVENTS = {
     // Nobody has downloaded a full Excel backup of a business unit for
     // BACKUP_REMINDER_DAYS (modules/export/service/backupReminder).
     "backup.overdue": { label: "Excel backup overdue — download one", priority: "high" },
+
+    // Lead assignment (modules/opportunity/service/leadAssignmentService).
+    "assignment.salesperson.reassigned": { label: "A lead was reassigned away from you", priority: "high" },
+
+    // Quote approval by a Senior Sales Representative (quoteApprovalService).
+    "quote_approval.requested": { label: "Quote waiting for your approval", priority: "high" },
+    "quote_approval.resubmitted": { label: "Quote resubmitted for your approval", priority: "high" },
+    "quote_approval.approved": { label: "Your quote was approved — send it", priority: "high" },
+    "quote_approval.rejected": { label: "Your quote was rejected — changes needed", priority: "high" },
+
+    // Finance applications (modules/finance/service/loanRequestService).
+    "loan.submitted": { label: "New finance application to review", priority: "high" },
+    "loan.decided": { label: "Finance application status changed", priority: "high" },
+    "loan.reply": { label: "Reply on a finance application", priority: "medium" },
+
+    // Customer payments (modules/finance/service/customerPaymentService).
+    "customer_payment.received": { label: "Customer payment received", priority: "low" },
+    "customer_payment.overdue": { label: "Customer payment overdue", priority: "high" },
+
+    // Supplier credit (modules/equipment/service/supplierCreditService).
+    "supplier.credit.limit": { label: "Supplier over its credit limit", priority: "high" },
+    "supplier.credit.overdue": { label: "Supplier payment overdue", priority: "high" },
+    "supplier.reminder": { label: "Supplier account reminder", priority: "medium" },
+
+    // Projects, job scheduling and installations (modules/delivery).
+    "job.scheduled": { label: "Job scheduled for your team", priority: "high" },
+    "job.updated": { label: "Scheduled job moved, reassigned or progressed", priority: "medium" },
+    "project.updated": { label: "Project status changed", priority: "medium" },
+    "installation.completed": { label: "Installation completed — ready to invoice", priority: "medium" },
 };
 
 export const EVENT_KEYS = Object.keys(NOTIFICATION_EVENTS);

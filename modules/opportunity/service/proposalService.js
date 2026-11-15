@@ -32,6 +32,8 @@ import { exGstTotalOf } from "./quoteService.js";
 import { readableStages } from "./stageAccess.js";
 import { LIVE_STATUSES, OPEN_STATUSES } from "../model/proposal.js";
 import { newestFirst, pageOf, pagingOf } from "../../../utils/pagination.js";
+import { assertQuoteApprovedForSending } from "./quoteApprovalService.js";
+import { ensureProjectFor } from "../../delivery/service/projectService.js";
 
 const { Opportunity, Proposal, QuoteVersion, RequoteRequest, BusinessUnit, User, sequelize } = db;
 
@@ -155,6 +157,8 @@ export const sendProposal = async (id, payload = {}, actor, { linkBase } = {}) =
         where: { id: parseId(payload.quoteVersionId, "quoteVersionId"), opportunityId: opportunity.id },
     });
     if (!quoteVersion) throw httpError(400, "Pick a saved quote version for this job");
+    // Senior Sales sign-off, where the unit requires it (quoteApprovalService).
+    await assertQuoteApprovedForSending(opportunity, quoteVersion);
 
     const to = oneLine(payload.to ?? opportunity.customerEmail, 254).toLowerCase();
     if (!to) throw httpError(400, "The customer has no email address — enter one to send to");
@@ -316,6 +320,9 @@ const applyResponse = async (opportunity, proposal, { decision, name, note, chan
     // A yes moves the job on — if it is still sitting at the proposal stage.
     if (decision === "accepted" && opportunity.lifecycle === "Active" && opportunity.stage === PROPOSAL_STAGE)
         await moveToNextStage(opportunity, actor, { byline: channel === "customer" ? "accepted online by the customer" : null });
+    // A signed job is a project from here on (Project Status). Never refuses
+    // the acceptance: a failure is logged and the project can be opened by hand.
+    if (decision === "accepted") await ensureProjectFor(opportunity, actor, { signedAt: now });
 };
 
 /** { outcome: accepted | rejected | renegotiate, note?, customerName? } — an answer given by phone or in person. */

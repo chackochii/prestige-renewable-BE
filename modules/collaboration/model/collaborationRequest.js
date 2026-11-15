@@ -34,7 +34,7 @@ export const approverRoleFor = (department) => APPROVAL_ROLE_BY_DEPARTMENT[depar
  * requesters here, not a team requests are sent to, so they sit in none.
  */
 export const DEPARTMENT_ROLES = {
-    sales: ["SMM", "SREP"],
+    sales: ["SMM", "SSREP", "SREP"],
     operations: ["BOM", "OPC", "SITEOM", "CREW", "QSM", "OMM"],
     procurement: ["PROC"],
     finance: ["FIN"],
