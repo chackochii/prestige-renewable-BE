@@ -12,7 +12,7 @@ import { DEPARTMENTS, departmentsForRoles } from "../../collaboration/model/coll
 import { diff, recordActivity } from "../../activity/service/activityService.js";
 import { hashPin } from "../model/user.js";
 import { parseId } from "../../../utils/ids.js";
-import { signPinSetupToken, signToken } from "../../../utils/jwt.js";
+import { signPasswordSetupToken, signPinSetupToken, signToken } from "../../../utils/jwt.js";
 
 const { User, BusinessUnit, UserBusinessUnit, Referrer, sequelize } = db;
 
@@ -47,6 +47,18 @@ const cleanPin = (value, label = "pin") => {
     if (!PIN_RE.test(pin)) throw httpError(400, `${label} must be 4 to 8 digits`);
     if (isWeakPin(pin)) throw httpError(400, `${label} is too easy to guess — avoid repeated or sequential digits`);
     return pin;
+};
+
+/**
+ * A password the person chooses for themselves: 8–100 characters, at least one
+ * letter and one number, and not their email address.
+ */
+const cleanOwnPassword = (value, email) => {
+    if (typeof value !== "string" || value.length < 8) throw httpError(400, "Your new password needs at least 8 characters");
+    if (value.length > 100) throw httpError(400, "Your new password can be at most 100 characters");
+    if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) throw httpError(400, "Use at least one letter and one number in your new password");
+    if (email && value.trim().toLowerCase() === String(email).toLowerCase()) throw httpError(400, "Your password cannot be your email address");
+    return value;
 };
 
 /** What a user record says about its PIN, for the admin screens and the session payload. */
@@ -188,6 +200,8 @@ export const getUserWithPermissions = async (id) => {
     return {
         ...user.get({ plain: true }),
         ...pinStateOf(secrets ?? user),
+        // Signed in with the temporary password an administrator set: their own comes first.
+        mustChangePassword: Boolean(user.passwordIsTemporary),
         permissions: await listPermissionCodesForRoles(user.roles),
     };
 };
@@ -274,7 +288,10 @@ export const listDirectory = async ({ businessUnitId, department } = {}, actor =
 // Credentials: a password (8+ characters), a temporary PIN (`temporaryPin`,
 // 4–8 digits, or `issuePin: true` to have one generated), or both. The
 // temporary PIN is returned once, as `temporaryPin` on the result, for the
-// administrator to pass on; the person replaces it on first login.
+// administrator to pass on; the person replaces it on first login. A password
+// an administrator sets is temporary the same way: the first sign-in with it
+// asks the person to choose their own (loginUser → POST /users/me/password).
+// Only a user made without an actor (a seed or script) keeps the password given.
 export const createUser = async (payload = {}, actor = null, ctx = null) => {
     const actorId = actor?.id ?? null;
     const { name, password, title, phone, status } = payload;
@@ -310,6 +327,7 @@ export const createUser = async (payload = {}, actor = null, ctx = null) => {
                 name: name.trim(),
                 email,
                 password: password || null, // hashed by the model hook
+                passwordIsTemporary: Boolean(password) && Boolean(actor),
                 pinHash: temporaryPin ? await hashPin(temporaryPin) : null,
                 pinIsTemporary: Boolean(temporaryPin),
                 pinIssuedById: temporaryPin ? actorId : null,
@@ -402,15 +420,44 @@ export const updateUser = async (id, payload = {}, actor = null, ctx = null) => 
     return fresh;
 };
 
-// Admin/director reset. Self-service change (with current-password check)
-// arrives with the auth module.
+// Admin/director reset. The password set here is temporary: the person signs
+// in with it once and must then choose their own (as for a new user) — unless
+// administrators are resetting their own, which is theirs already. The
+// self-service change is setOwnPassword.
 export const resetPassword = async (id, password, actor = null, ctx = null) => {
     if (typeof password !== "string" || password.length < 8)
         throw httpError(400, "password is required (minimum 8 characters)");
     const user = await getUser(id);
     assertActorCanManage(await actorUnitScope(actor), user);
-    await user.update({ password }); // hashed by the model hook
-    await recordActivity({ actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "password_reset" });
+    const own = Boolean(actor) && actor.id === user.id;
+    await user.update({ password, passwordIsTemporary: !own, passwordSetAt: own ? new Date() : null }); // hashed by the model hook
+    await recordActivity({ actor, ctx, entityType: "user", entityId: user.id, entityLabel: user.name, action: "password_reset", meta: { temporary: !own } });
+};
+
+/**
+ * The signed-in person sets their own password: { newPassword, currentPassword? }.
+ * A temporary password (set by an administrator) is replaced without proof —
+ * the sign-in with it was the proof, and the caller holds the set-up token it
+ * gave. Changing a password they chose themselves needs the current one.
+ * Answers with a full session token.
+ */
+export const setOwnPassword = async (userId, payload = {}, ctx = null) => {
+    const user = await User.scope("withPassword").findByPk(userId);
+    if (!user) throw httpError(404, "User not found");
+    const newPassword = cleanOwnPassword(payload.newPassword ?? payload.password, user.email);
+    const wasTemporary = Boolean(user.passwordIsTemporary);
+    if (!wasTemporary) {
+        if (typeof payload.currentPassword !== "string" || !(await user.checkPassword(payload.currentPassword)))
+            throw httpError(400, "Enter your current password to change it");
+    }
+    if (await user.checkPassword(newPassword))
+        throw httpError(400, wasTemporary ? "Choose a new password — not the temporary one you were given" : "Choose a password different from the current one");
+    await user.update({ password: newPassword, passwordIsTemporary: false, passwordSetAt: new Date() }); // hashed by the model hook
+    await recordActivity({
+        actor: user, ctx, entityType: "user", entityId: user.id, entityLabel: user.name,
+        action: wasTemporary ? "password_set_first_login" : "password_changed",
+    });
+    return { token: signToken(user), user: await getUserWithPermissions(user.id) };
 };
 
 /**
@@ -477,7 +524,9 @@ export const deleteUser = async (id, actor = null, ctx = null) => {
 // { email, password } as always, or { email, pin }. A login with a temporary
 // PIN answers with mustChangePin: true and a token that only opens
 // GET /users/me and POST /users/me/pin — the person sets their own PIN there
-// and gets a full session token back.
+// and gets a full session token back. A login with a temporary password (one
+// an administrator set) does the same: mustChangePassword: true and a token
+// that only opens GET /users/me and POST /users/me/password.
 export const loginUser = async ({ email, password, pin } = {}, ctx = null) => {
     if (typeof email !== "string" || !email.trim()) throw httpError(400, "email is required");
     const withPin = pin !== undefined && pin !== null && pin !== "";
@@ -493,14 +542,17 @@ export const loginUser = async ({ email, password, pin } = {}, ctx = null) => {
 
     await user.update({ lastLoginAt: new Date() });
     const mustChangePin = withPin && Boolean(user.pinIsTemporary);
+    const mustChangePassword = !withPin && Boolean(user.passwordIsTemporary);
     await recordActivity({
         actor: user, ctx, entityType: "user", entityId: user.id, entityLabel: user.name,
-        action: "login", meta: { method: withPin ? "pin" : "password", ...(mustChangePin ? { temporaryPin: true } : {}) },
+        action: "login",
+        meta: { method: withPin ? "pin" : "password", ...(mustChangePin ? { temporaryPin: true } : {}), ...(mustChangePassword ? { temporaryPassword: true } : {}) },
     });
 
     return {
-        token: mustChangePin ? signPinSetupToken(user) : signToken(user),
+        token: mustChangePin ? signPinSetupToken(user) : mustChangePassword ? signPasswordSetupToken(user) : signToken(user),
         user: await getUserWithPermissions(user.id),
         mustChangePin,
+        mustChangePassword,
     };
 };

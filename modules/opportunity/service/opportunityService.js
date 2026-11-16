@@ -692,13 +692,27 @@ export const advanceStage = async (id, actor, message = {}) => {
             throw httpError(400, "Answer the client-input question before leaving estimation");
         const inspection = await preSiteInspectionBlocker(opportunity);
         if (inspection) throw httpError(400, inspection);
-        if (!(await quoteHasItems(opportunity.id)))
-            throw httpError(400, "Add at least one item to the quote before leaving estimation");
-        // The proposal stage sends a generated version to the customer, so the
-        // quote has to be generated — locked to a version, no draft open on it
-        // — before the job gets there.
-        if (!(await quoteIsGenerated(opportunity.id)))
-            throw httpError(400, "Generate the quote before sending it to proposal");
+        // What goes to proposal is either the manual quote or a final AI
+        // (Solar + BESS) proposal — saved as a quote version when it was marked
+        // final (energyProposalService). Handing over a proposal version, or a
+        // job that has one, needs nothing from the manual quote.
+        const proposalVersion = await db.QuoteVersion.findOne({
+            where: {
+                opportunityId: opportunity.id,
+                energyProposalId: { [Op.ne]: null },
+                ...(message.quoteVersionId ? { id: parseId(message.quoteVersionId, "quoteVersionId") } : {}),
+            },
+            attributes: ["id"],
+        });
+        if (!proposalVersion) {
+            if (!(await quoteHasItems(opportunity.id)))
+                throw httpError(400, "Add at least one item to the quote (or mark a Solar + BESS proposal final) before leaving estimation");
+            // The proposal stage sends a generated version to the customer, so the
+            // quote has to be generated — locked to a version, no draft open on it
+            // — before the job gets there.
+            if (!(await quoteIsGenerated(opportunity.id)))
+                throw httpError(400, "Generate the quote before sending it to proposal");
+        }
     }
 
     // Leaving the proposal stage needs the customer's yes — through their

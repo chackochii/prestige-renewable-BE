@@ -45,3 +45,13 @@ export const signPinSetupToken = (user) =>
     jwt.sign({ sub: String(user.id), scope: PIN_SETUP_SCOPE }, secret(), {
         expiresIn: process.env.PIN_SETUP_TOKEN_EXPIRES_IN || "30m",
     });
+
+// The same for a password: issued when someone signs in with the temporary
+// password an administrator set (adding them, or a reset). It opens
+// GET /users/me and POST /users/me/password (which answers with a full session
+// token) and nothing else.
+export const PASSWORD_SETUP_SCOPE = "password_setup";
+export const signPasswordSetupToken = (user) =>
+    jwt.sign({ sub: String(user.id), scope: PASSWORD_SETUP_SCOPE }, secret(), {
+        expiresIn: process.env.PASSWORD_SETUP_TOKEN_EXPIRES_IN || "30m",
+    });

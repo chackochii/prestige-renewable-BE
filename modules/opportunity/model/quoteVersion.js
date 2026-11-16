@@ -15,6 +15,10 @@ export default (sequelize, DataTypes) => {
             grandTotal: { type: DataTypes.DECIMAL(14, 2) },
             snapshot: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
             createdById: { type: DataTypes.INTEGER },
+            // Set when the version is a final Solar + BESS proposal (energy_proposals)
+            // rather than the manual quote: its snapshot is { kind: "energy_proposal",
+            // energyProposal } and its PDF is the proposal template.
+            energyProposalId: { type: DataTypes.INTEGER, allowNull: true },
         },
         {
             tableName: "quote_versions",
@@ -29,6 +33,7 @@ export default (sequelize, DataTypes) => {
         QuoteVersion.belongsTo(db.Quote, { foreignKey: "quoteId", as: "quote" });
         QuoteVersion.belongsTo(db.Opportunity, { foreignKey: "opportunityId", as: "opportunity" });
         QuoteVersion.belongsTo(db.User, { foreignKey: "createdById", as: "createdBy" });
+        QuoteVersion.belongsTo(db.EnergyProposal, { foreignKey: "energyProposalId", as: "energyProposal", constraints: false });
     };
 
     return QuoteVersion;

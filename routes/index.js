@@ -1,5 +1,6 @@
 import { Router } from "express";
 import activityRoutes from "./activityRoutes.js";
+import aiSkillRoutes from "./aiSkillRoutes.js";
 import businessUnitRoutes from "./businessUnitRoutes.js";
 import customerPaymentRoutes from "./customerPaymentRoutes.js";
 import dashboardRoutes from "./dashboardRoutes.js";
@@ -32,6 +33,7 @@ router.get("/", (req, res) => {
 });
 
 router.use("/activity", activityRoutes); // the activity log
+router.use("/ai-skills", aiSkillRoutes); // Admin → AI skills: the proposal skill, its files and calculator settings
 router.use("/business-units", businessUnitRoutes);
 router.use("/customer-payments", customerPaymentRoutes); // what customers owe, GST included
 router.use("/dashboard", dashboardRoutes); // the central dashboard and the team view previews

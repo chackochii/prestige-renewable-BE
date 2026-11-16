@@ -9,6 +9,7 @@ import {
     changePin,
     removePin,
     setMyPin,
+    setMyPassword,
     remove,
     login,
     me,
@@ -17,7 +18,7 @@ import tokenValidator from "../middleware/tokenValidator.js";
 import requirePermission from "../middleware/requirePermission.js";
 import rateLimit from "../middleware/rateLimit.js";
 import allowTokenScope from "../middleware/allowTokenScope.js";
-import { PIN_SETUP_SCOPE } from "../utils/jwt.js";
+import { PASSWORD_SETUP_SCOPE, PIN_SETUP_SCOPE } from "../utils/jwt.js";
 
 const router = Router();
 
@@ -32,12 +33,15 @@ const loginLimiter = rateLimit({
     message: "Too many login attempts, try again in a few minutes.",
 });
 
-router.post("/login", loginLimiter, login); // { email, password } or { email, pin } → { token, user, mustChangePin }
-// Both accept the PIN set-up token a temporary-PIN login hands out, as well as
-// a full session token: the person can see who they are and set their own PIN,
-// and nothing else, until they do.
-router.get("/me", allowTokenScope(PIN_SETUP_SCOPE), tokenValidator, me); // current user from the bearer token
+router.post("/login", loginLimiter, login); // { email, password } or { email, pin } → { token, user, mustChangePin, mustChangePassword }
+// These accept the set-up token a temporary-PIN or temporary-password login
+// hands out, as well as a full session token: the person can see who they are
+// and set their own PIN or password, and nothing else, until they do.
+router.get("/me", allowTokenScope(PIN_SETUP_SCOPE, PASSWORD_SETUP_SCOPE), tokenValidator, me); // current user from the bearer token
 router.post("/me/pin", allowTokenScope(PIN_SETUP_SCOPE), tokenValidator, setMyPin); // { pin, currentPin? | currentPassword? } → { token, user }
+// { newPassword, currentPassword? } → { token, user } — currentPassword only when changing a password they chose themselves.
+// Limited like the login: it checks a password too.
+router.post("/me/password", loginLimiter, allowTokenScope(PASSWORD_SETUP_SCOPE), tokenValidator, setMyPassword);
 
 // People directory for pickers: id, name, title, roles, status and
 // departments (from the roles — collaboration DEPARTMENT_ROLES) of the active
@@ -53,11 +57,12 @@ router.get("/directory", tokenValidator, directory); // ?businessUnitId= (requir
 // accounts.
 router.get("/", tokenValidator, requirePermission("admin.read"), getAll); // ?role=&status=&businessUnitId=&search=&page=&pageSize=
 // Body: { name, email, password? | temporaryPin? | issuePin?, roles: ["SMM", ...], title?, phone?,
+//         (the password is temporary: the person chooses their own at first sign-in)
 //         status?, businessUnitIds?, referrerId? } → { data: user, temporaryPin? } (the PIN is returned once)
 router.post("/", tokenValidator, requirePermission("admin.create"), create);
 router.get("/:id", tokenValidator, requirePermission("admin.read"), getOne);
 router.patch("/:id", tokenValidator, requirePermission("admin.update"), update); // same fields as create, all optional; no password here
-router.patch("/:id/password", tokenValidator, requirePermission("admin.update"), changePassword); // { password } — admin reset
+router.patch("/:id/password", tokenValidator, requirePermission("admin.update"), changePassword); // { password } — admin reset; temporary until the person sets their own
 router.post("/:id/pin/reset", tokenValidator, requirePermission("admin.update"), changePin); // { temporaryPin? } → { data, temporaryPin } — a new temporary PIN
 router.delete("/:id/pin", tokenValidator, requirePermission("admin.update"), removePin); // sign in with the password only
 router.delete("/:id", tokenValidator, requirePermission("admin.delete"), remove); // soft delete

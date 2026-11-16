@@ -97,6 +97,9 @@ const PERMISSIONS = MODULES.flatMap(([prefix, label]) =>
     ["loans.delete", "Delete Finance & Loans", "Finance & Loans"],
     ["quotes.approve", "Approve quotations before they go to the customer", "Estimation"],
     ["activity.read", "View the activity log", "System Administration"],
+    // Admin → AI skills: the proposal skill's text, reference files and
+    // calculator settings (migration 20261115000001).
+    ["skills.manage", "Manage AI skills (proposal calculator and its settings)", "System Administration"],
 ]);
 
 const ALL = PERMISSIONS.map(([code]) => code);
@@ -121,7 +124,7 @@ const GRANTS = {
         "admin.export",
         "pricing.cost.read", "equipment.update", "suppliers.credit.manage",
         ...of("loans", "read", "update", "delete"),
-        "quotes.approve", "activity.read",
+        "quotes.approve", "activity.read", "skills.manage",
     ],
     SMM: [
         ...of("leads", "create", "read", "update", "delete", "approve"),
@@ -237,7 +240,7 @@ const GRANTS = {
         ...of("admin", "create", "read", "update", "delete", "approve"),
         ...of("dashboards", "read", "update"),
         "admin.export",
-        "pricing.cost.read", "equipment.update", "activity.read",
+        "pricing.cost.read", "equipment.update", "activity.read", "skills.manage",
     ],
     HRM: [],
 };

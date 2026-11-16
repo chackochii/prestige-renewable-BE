@@ -1,7 +1,7 @@
 {
   "name": "prestige-be",
   "version": "1.0.0",
-  "description": "Prestige Business Units — Sales & Delivery backend",
+  "description": "Prestige Business Units \u2014 Sales & Delivery backend",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -22,7 +22,8 @@
     "storage:check-upload": "node -r dotenv/config scripts/check-upload.js",
     "storage:copy-to-spaces": "node scripts/copy-uploads-to-spaces.js",
     "demo:seed": "node scripts/seed-demo-pipeline.js",
-    "demo:remove": "node scripts/seed-demo-pipeline.js --remove"
+    "demo:remove": "node scripts/seed-demo-pipeline.js --remove",
+    "proposal:selftest": "node scripts/proposal-selftest.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1134.0",

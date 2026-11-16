@@ -26,6 +26,12 @@ export default (sequelize, DataTypes) => {
             // it. Length is validated pre-hash (a bcrypt hash is 60 chars).
             // Null for a user who signs in with a PIN only (migration 20261114000001).
             password: { type: DataTypes.STRING, allowNull: true, validate: { len: [8, 100] } },
+            // A password an administrator set (adding the user, or a reset) is
+            // temporary: the person must replace it with their own the first
+            // time they sign in with it (migration 20261117000001), when
+            // passwordSetAt is stamped.
+            passwordIsTemporary: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            passwordSetAt: { type: DataTypes.DATE, allowNull: true },
             // The PIN (hashed) beside the password. An administrator issues a
             // temporary one; the person must replace it with their own on first
             // login (pinIsTemporary), when pinSetAt is stamped.

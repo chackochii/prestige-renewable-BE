@@ -56,6 +56,9 @@ import defineCustomerPayment from "../modules/finance/model/customerPayment.js";
 import defineProject from "../modules/delivery/model/project.js";
 import defineJobSchedule from "../modules/delivery/model/jobSchedule.js";
 import defineInstallation from "../modules/delivery/model/installation.js";
+import defineAiSkill from "../modules/aiSkill/model/aiSkill.js";
+import defineAiSkillVersion from "../modules/aiSkill/model/aiSkillVersion.js";
+import defineEnergyProposal from "../modules/energyProposal/model/energyProposal.js";
 
 const db = { sequelize };
 
@@ -135,6 +138,11 @@ db.Project = defineProject(sequelize, DataTypes);
 db.JobSchedule = defineJobSchedule(sequelize, DataTypes);
 db.Installation = defineInstallation(sequelize, DataTypes);
 
+// AI skills (Admin → AI skills) and the energy proposals made with them
+db.AiSkill = defineAiSkill(sequelize, DataTypes);
+db.AiSkillVersion = defineAiSkillVersion(sequelize, DataTypes);
+db.EnergyProposal = defineEnergyProposal(sequelize, DataTypes);
+
 Object.values(db)
     .filter((model) => typeof model?.associate === "function")
     .forEach((model) => model.associate(db));
@@ -194,6 +202,9 @@ export const {
     Project,
     JobSchedule,
     Installation,
+    AiSkill,
+    AiSkillVersion,
+    EnergyProposal,
 } = db;
 
 export { sequelize };

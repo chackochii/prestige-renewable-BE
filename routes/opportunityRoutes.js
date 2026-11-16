@@ -53,6 +53,7 @@ import * as approvals from "../modules/opportunity/controller/approvalsControlle
 import * as procurement from "../modules/opportunity/controller/procurementController.js";
 import * as dataExport from "../modules/export/controller/exportController.js";
 import * as leadManagement from "../modules/opportunity/controller/leadManagementController.js";
+import * as energyProposals from "../modules/energyProposal/controller/energyProposalController.js";
 import tokenValidator from "../middleware/tokenValidator.js";
 import { tokenFromQuery } from "../middleware/tokenFromQuery.js";
 import requirePermission, { requireAnyPermission } from "../middleware/requirePermission.js";
@@ -240,6 +241,25 @@ router.post("/:id/collaboration/requests", readAny, collaboration.create); // { 
 router.get("/:id/quote-approvals", readAny, leadManagement.listQuoteApprovals); // → { required, items: [...] }
 router.post("/:id/quote-approvals", requireAnyPermission("leads.update", "estimation.update"), leadManagement.submitQuoteApproval); // { quoteVersionId?, note? } — note required on a resubmission
 router.post("/:id/quote-approvals/:approvalId/decision", requirePermission("quotes.approve"), leadManagement.decideQuoteApproval); // { outcome: approved|rejected, comments } — comments required to reject
+
+// Commercial Solar + BESS (+ EV) proposals in the Prestige template
+// (energyProposalService). The AI drafts the calculator's input from the job's
+// bills to the admin's skill (Admin → AI skills); the calculator works out
+// every figure; the PDF is built in the browser and can be filed on the job.
+// Sales and estimation both prepare them.
+const proposalWrite = requireAnyPermission("leads.update", "estimation.update");
+router.get("/:id/energy-proposals/options", readAny, energyProposals.options); // → { skill, settings, aiConfigured, bills, jobInput }
+router.post("/:id/energy-proposals/calculate", proposalWrite, energyProposals.calculate); // { input } → { input, result } — nothing saved
+router.post("/:id/energy-proposals/ai-draft", proposalWrite, energyProposals.aiDraft); // { instructions?, documentIds?, proposalId? } → the proposal
+router.get("/:id/energy-proposals", readAny, energyProposals.list);
+router.post("/:id/energy-proposals", proposalWrite, energyProposals.create); // { input?, title? } — a blank draft from the job
+router.get("/:id/energy-proposals/:proposalId", readAny, energyProposals.get); // { input, result, narrative, text, defaults, document, skill, ai, pdf }
+router.patch("/:id/energy-proposals/:proposalId", proposalWrite, energyProposals.update); // { input?, narrative?, title?, number?, preparedOn?, validUntil? } — recalculated; drafts only
+router.post("/:id/energy-proposals/:proposalId/narrative/ai", proposalWrite, energyProposals.rewrite); // { instructions? }
+router.post("/:id/energy-proposals/:proposalId/finalise", proposalWrite, energyProposals.finalise);
+router.post("/:id/energy-proposals/:proposalId/revise", proposalWrite, energyProposals.revise); // a new draft revision
+router.post("/:id/energy-proposals/:proposalId/pdf", proposalWrite, uploadSingleFile, energyProposals.attachPdf); // multipart file — filed on the job's documents
+router.delete("/:id/energy-proposals/:proposalId", proposalWrite, energyProposals.remove); // drafts only
 
 router.get("/:id/quote/versions", readAny, getQuoteVersions);
 router.post("/:id/quote/versions", estimate, createQuoteVersion); // { snapshot, quoteNumber?, grandTotal? } → the version (+ `quote`, now generated); 409 once generated

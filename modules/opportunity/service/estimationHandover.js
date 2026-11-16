@@ -66,11 +66,14 @@ export const handOverToProposal = async (id, payload = {}, actor) => {
                   title: `${opportunity.number}: revised quote ready — send the new proposal`,
                   body: `${customerLabel(opportunity)} — ${quote} is the revised quote (re-quote round ${requote.round})${actor?.name ? `, from ${actor.name}` : ""}. What changed: ${note}`,
                   requote: { quoteVersionId: version.id, note },
+                  // The stage gate accepts a final Solar + BESS proposal in place of the manual quote.
+                  quoteVersionId: version.id,
               }
             : {
                   event: "estimation.handover",
                   title: `${opportunity.number}: quote ready — send the proposal`,
                   body: `${customerLabel(opportunity)} — ${quote} is priced and ready to send to the customer${actor?.name ? `, from ${actor.name}` : ""}.${note ? ` Note: ${note}` : ""}`,
+                  quoteVersionId: version.id,
               }
     );
 

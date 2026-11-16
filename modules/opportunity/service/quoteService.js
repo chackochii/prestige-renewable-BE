@@ -370,6 +370,9 @@ const presentVersion = (row) => ({
     quoteNumber: row.quoteNumber,
     invoiceNumber: row.invoiceNumber,
     grandTotal: row.grandTotal === null ? null : Number(row.grandTotal),
+    // "quote" (built in the quote builder) | "energy_proposal" (a final Solar + BESS proposal — its PDF is the proposal template)
+    kind: row.energyProposalId ? "energy_proposal" : "quote",
+    energyProposalId: row.energyProposalId ?? null,
     snapshot: row.snapshot ?? null,
     createdAt: row.createdAt,
     createdByName: row.createdBy?.name ?? null,
@@ -452,9 +455,14 @@ export const createVersion = async (id, payload = {}, actor) => {
 
     const { version, reused } = await sequelize.transaction(async (transaction) => {
         const newest = await QuoteVersion.findOne({ where: { quoteId: quote.id }, order: [["version", "DESC"], ["id", "DESC"]], transaction });
-        if (newest && sameQuote(snapshot, newest)) {
-            await quote.update({ status: "generated", generatedAt: newest.createdAt, generatedVersionId: newest.id }, { transaction });
-            return { version: newest, reused: true };
+        // Unchanged is judged against the newest version built here, not a
+        // Solar + BESS proposal saved on the same quote since.
+        const newestManual = newest?.energyProposalId
+            ? await QuoteVersion.findOne({ where: { quoteId: quote.id, energyProposalId: null }, order: [["version", "DESC"], ["id", "DESC"]], transaction })
+            : newest;
+        if (newestManual && sameQuote(snapshot, newestManual)) {
+            await quote.update({ status: "generated", generatedAt: newestManual.createdAt, generatedVersionId: newestManual.id }, { transaction });
+            return { version: newestManual, reused: true };
         }
         // Numbering is the server's: whatever the client guessed, the next
         // version is one past the highest this quote already has.

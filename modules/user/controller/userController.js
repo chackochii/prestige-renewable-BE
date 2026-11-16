@@ -9,6 +9,7 @@ import {
     resetPin,
     clearPin,
     setOwnPin,
+    setOwnPassword,
     deleteUser,
     loginUser,
 } from "../service/userService.js";
@@ -18,9 +19,17 @@ import { successResponse } from "../../../utils/apiResponse.js";
 export const login = asyncHandler(async (req, res) => {
     const { email, password, pin } = req.body;
 
-    const { token, user, mustChangePin } = await loginUser({ email, password, pin }, req.activity);
+    const { token, user, mustChangePin, mustChangePassword } = await loginUser({ email, password, pin }, req.activity);
 
-    successResponse(res, { token, user, mustChangePin });
+    successResponse(res, { token, user, mustChangePin, mustChangePassword });
+});
+
+// The signed-in person sets their own password (first sign-in with a temporary
+// one, or a change); answers with a full session token.
+export const setMyPassword = asyncHandler(async (req, res) => {
+    const { token, user } = await setOwnPassword(req.user.id, req.body, req.activity);
+
+    successResponse(res, { token, user, message: "Password set" });
 });
 
 // The signed-in person sets or changes their own PIN; answers with a full session token.

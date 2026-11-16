@@ -19,9 +19,10 @@ export const tokenValidator = async (req, res, next) => {
             return errorResponse(res, "Invalid or expired token", 401);
         }
 
-        // Scoped tokens (e.g. document download links) only work on the route
-        // that declared the matching scope — see tokenFromQuery.
-        if (payload.scope && payload.scope !== req.tokenScope)
+        // Scoped tokens (e.g. document download links, the set-up tokens) only
+        // work on a route that declared the matching scope — see tokenFromQuery
+        // and allowTokenScope.
+        if (payload.scope && !(req.tokenScopes ?? [req.tokenScope]).includes(payload.scope))
             return errorResponse(res, "This token cannot be used for this request", 401);
         req.tokenPayload = payload;
 

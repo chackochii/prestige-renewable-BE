@@ -30,6 +30,7 @@ import { PROJECT_TYPES } from "../model/quote.js";
 import { COST_CALC_TYPES, COST_KINDS } from "../model/quoteCost.js";
 import { cleanReading, energySizing, quotedSystem } from "./energyBillService.js";
 import { recordSystemEvent } from "./leadWorkflowService.js";
+import { activeSkillFor, skillPromptText } from "../../aiSkill/service/aiSkillService.js";
 import { assertEditable, findQuote, loadQuoteFor, presentQuote, SAVINGS_BASIS_MAX } from "./quoteService.js";
 
 const { QuoteItem, QuoteCost, Document, sequelize } = db;
@@ -289,6 +290,16 @@ const size = (value) => {
  *     calcType, value, description }], assumptions, checks, dropped, model,
  *     energy (with a bill: energySizing's result for the quoted system) }
  */
+/**
+ * The admin's proposal skill as guidance for the catalogue quote: its sizing
+ * rules and conventions, under the rules above (catalogue items only, prices
+ * from the catalogue, no rebate amounts it cannot justify).
+ */
+const skillGuidance = (skill) =>
+    skill
+        ? `\n\n=== COMPANY SKILL (guidance) ===\nThe company's proposal skill follows. Use its sizing rules, product choices and conventions when you choose items and quantities. Where it conflicts with the rules above — catalogue items only, prices from the catalogue, no rebate amounts you cannot justify — the rules above win. Parts about running scripts or building documents do not apply here.\n\n${skillPromptText(skill, { maxChars: 60_000 })}`
+        : "";
+
 export const suggestQuote = async (id, payload = {}) => {
     const { opportunity, quote } = await loadQuoteFor(id);
     assertEditable(quote);
@@ -307,8 +318,11 @@ export const suggestQuote = async (id, payload = {}) => {
     const catalog = await listCatalogItems();
     if (!catalog.length) throw httpError(409, "The quote catalog is empty — add items to it before asking for an AI quote");
 
+    // The company's proposal skill (Admin → AI skills) guides the sizing and
+    // product choices; the catalogue rules above still decide what can be quoted.
+    const skill = await activeSkillFor("energy_proposal");
     const answer = await generateJson({
-        system: bill ? `${SYSTEM}\n\n${BILL_RULES}` : SYSTEM,
+        system: `${bill ? `${SYSTEM}\n\n${BILL_RULES}` : SYSTEM}${skillGuidance(skill)}`,
         prompt: promptFor({ brief: jobBrief(opportunity), catalog, quote: presentQuote(quote, opportunity), instructions, bill }),
         schema: bill ? BILL_RESPONSE_SCHEMA : RESPONSE_SCHEMA,
     });

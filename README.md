@@ -570,6 +570,15 @@ New codes, editable on the roles screen like the rest: `pricing.cost.read` (purc
 
 `/users/me` and the login payload also carry `hasPin`, `mustChangePin`, `pinSetAt`. Hashes are never returned.
 
+### Users: own password at first sign-in
+
+Migration `20261117000001`. A password an administrator sets — adding the user (`POST /api/users`) or resetting it (`PATCH /api/users/:id/password`) — is **temporary** (`passwordIsTemporary` on the user). The first sign-in with it answers `mustChangePassword: true` with a set-up token (30 minutes, `PASSWORD_SETUP_TOKEN_EXPIRES_IN`) that only opens `GET /users/me` and `POST /users/me/password`; the person chooses their own password there and gets a full session. The web app's sign-in page shows that step. Existing accounts, users made by seeds or scripts, and administrators resetting their own password are not affected.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `POST` | `/api/users/login` | also returns `mustChangePassword` |
+| `POST` | `/api/users/me/password` | `{ newPassword, currentPassword? }` → `{ token, user }` — a full session. 8–100 characters with a letter and a number, not the email, not the current password. `currentPassword` is needed only to change a password the person chose themselves |
+
 ### Activity log
 
 `GET /api/activity` (`activity.read`) — `?businessUnitId=&entityType=&entityId=&actorId=&action=&source=&from=&to=&search=&page=&pageSize=`, newest first; `GET /api/activity/entities/:type/:id` for one record. Each row: who (`actor`), when (`at`), the source (`web` for a browser, `api` otherwise, or the `X-Client-Source` header; `public`, `webhook`, `system` for those paths), the IP, and `changes: { field: { from, to } }`. Written by leads (create, edit, stage, assignments), users (create, edit, PIN and password events, logins), equipment, categories, suppliers, credit, loans, payments, projects, jobs, installations and quote approvals. A failed log write never fails the change.
@@ -627,6 +636,34 @@ Quote versions now carry `approvalStatus`. Where approval is required, `POST /:i
 ### Dashboard and team view previews
 
 `GET /api/dashboard?businessUnitId=` (`dashboards.read`) — sections for leads (by stage, new, unassigned, past SLA, pipeline value), quote approvals, loans, jobs, projects, installations, finance (customer payments and billing), suppliers (credit), pricing and recent activity; each appears only for callers who can read that area. `GET /api/dashboard/views/procurement` and `/views/operations` `?businessUnitId=` — what that team's screens hold plus the team's roles and permissions; open to management (`admin.read`) and the team itself.
+
+## AI skills & commercial proposals (Solar + BESS + EV)
+
+Migration `20261115000001`. The Prestige proposal skill (its SKILL.md is in `modules/aiSkill/defaults/energy-proposal-skill.md`) is seeded as the active skill and edited on **Admin → AI skills**.
+
+**AI skills** (`/api/ai-skills`, read: `admin.read` or `skills.manage`; change: `skills.manage` — Business Owner, SysAdmin, ADM). A skill holds its instructions (`content`, the SKILL.md), reference files (`references` — methodology.md, worked examples, calc.py; text files up to 300,000 characters) and the calculator settings (`settings`: company details for the PDF, products and ex-GST prices, PRC/STC rules, network loss factors, finance, savings assumptions, exclusions), merged over `modules/energyProposal/service/proposalDefaults.js`. Every save is a new version with a note (`ai_skill_versions`); `POST /:id/versions/:version/restore` brings an earlier one back as a new version. One skill per purpose is active; a new skill starts inactive.
+
+| Method | Route | Body → returns |
+|---|---|---|
+| `GET` | `/api/ai-skills` / `/:id` | list / one skill with content, reference names, merged settings and the defaults |
+| `PATCH` | `/api/ai-skills/:id` | `{ name?, description?, content?, settings?, isActive?, note? }` — settings are validated (milestones add to 100%, 12 monthly yields, …) |
+| `POST` | `/api/ai-skills/:id/files` | multipart `file` + `target: content \| reference` + `note?` |
+| `GET/PUT/DELETE` | `/api/ai-skills/:id/references/:name` | read / edit `{ content }` / remove a reference file |
+| `GET` | `/api/ai-skills/:id/versions[/:version]` | history / one version |
+| `POST` | `/api/ai-skills/:id/settings/reset` | settings back to the defaults |
+
+**Energy proposals** (`/api/opportunities/:id/energy-proposals`, read: `leads.read`/`estimation.read`; write: `leads.update`/`estimation.update`). The commercial proposal PDF in the Prestige template (cover, why solar + battery, energy profile, price and incentives, payment options and savings, conditions and acceptance, value adds, back page), built in the browser by prestige-fe `helpers/energyProposalPdf.js`.
+
+1. **Draft with AI** — `POST …/ai-draft { instructions?, documentIds?, proposalId? }`: up to four bills on the job go to the AI with the active skill (and its reference files). It returns the calculator's input — bill periods, tariff rates as printed (ex or incl. GST), supply address, NMI, network, the system chosen by the skill's sizing rules or named in the instructions, and prices — plus open items. It never does the arithmetic.
+2. **The calculator** (`proposalCalculator.js`, no AI) works out every figure: day-weighted usage and cost; prices incl. GST; PRCs = FLOOR(DSC × 6 h × 15 yrs × NLF × 10) with BESS4 tiers / BESS5 usable × 0.1 and zero unless new solar ≥ ¼ usable; battery STCs (≤ 100 kWh) and solar STCs FLOOR(kW × zone × 5) for ≤ 100 kW; Option A (finance on the net, 20% upfront, 24 instalments rounded down, the last absorbs the rest) and Option B (20/70/10); a month-by-month savings model (solar window, battery peak-first capped at the evening load, peak top-up from the cheapest band, export, EV revenue as an estimate); payback A / B; and the open items (oversized battery, solar over 100 kW, panel count mismatch, missing ABN/NMI, winter-only bills, …). `npm run proposal:selftest` checks it against confirmed figures from sent proposals.
+3. **The words** are written from the figures (`proposalNarrative.js`) in the sent proposals' voice; `POST …/:proposalId/narrative/ai { instructions? }` has the AI rewrite the subtitle, advantages, value adds and notes to the skill. Conditions, savings basis and payment wording are always written from the figures.
+4. Edit and recalculate (`PATCH …/:proposalId`, live preview `POST …/calculate`), then `POST …/finalise` (locked; a final keeps its figures even if the settings change), `POST …/revise` (new draft revision, same number), and `POST …/pdf` (multipart — files the PDF on the job's documents).
+
+**Sending it** (migration `20261116000001`). Finalising also saves the proposal as the next version of the job's quote (`quote_versions.energy_proposal_id`; the version's `kind` is `energy_proposal`, `grandTotal` the net price incl. GST, and its snapshot `{ kind, energyProposal, quote }` — the frozen proposal the PDF is drawn from, plus the system as quote lines so procurement's BOQ, the approvals and the installation record read it like any quote). From there it goes the way a manual quote does: `POST /:id/estimation/handover { quoteVersionId }` sends it to proposal (the stage gate takes a final proposal in place of a priced, generated quote), Senior Sales approval applies where the unit requires it, `POST /:id/proposals { quoteVersionId }` gives the customer's link — which shows this PDF — and their acceptance sets the job's value to the net price ex GST. A job quoted in the quote builder sends that quote, as before.
+
+**The template** is the Metro Petroleum St Marys V8 proposal: the battery cycles its usable capacity daily (solar first, topped up from the grid's cheapest band, shown as a "Less: battery top-up" line — settings `savings.batteryModel: daily_cycle`; `solar_first` is the earlier stored-solar + peak-shifting model), rates can be entered as printed ex GST (`tariff.ratesExGst`), a site yield can be set (`params.yieldKwhPerKwp`), a bill's same-period-last-year row is shown, not counted (`periods[].comparison`), EV can be EV-ready only (`system.ev.future` — not priced, not in the savings, excluded, its revenue a value add), and page 6 ends with "Important — estimates only".
+
+Quote numbers are `QN` + the unit's date + a 4-digit number for the day + `-S` (prefix, suffix and validity are settings). The existing AI quote (Build with AI / Quote from bill) also gets the active skill as guidance, under its catalogue rules.
 
 ## Project structure
 
