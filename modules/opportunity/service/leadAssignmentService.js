@@ -174,24 +174,12 @@ export const findDuplicateLeads = async ({ businessUnitId, phone, email, contact
 };
 
 /**
- * How lead creation treats a duplicate: block (the default — refuse with 409),
- * warn (create it, and report the matches) or off. LEAD_DUPLICATE_CHECK sets it.
+ * How lead creation treats a duplicate — another active lead with the same
+ * phone or email: warn (the default — the lead is saved, and the matches are
+ * reported back and logged) or off (not looked for). A duplicate never refuses
+ * a lead (Nov 2026): one phone or email is often used for several leads (a
+ * household, a business, a partner). LEAD_DUPLICATE_CHECK sets it; the old
+ * "block" value reads as warn.
  */
-export const duplicateMode = () => {
-    const mode = String(process.env.LEAD_DUPLICATE_CHECK ?? "block").trim().toLowerCase();
-    return ["block", "warn", "off"].includes(mode) ? mode : "block";
-};
-
-/** The 409 for a lead that already exists — naming its representative when it has one. */
-export const duplicateError = (matches) => {
-    const first = matches[0];
-    const on = first.matchedOn.join(" and ") || "contact details";
-    const message = first.salesperson
-        ? `${alreadyAssignedMessage(first.salesperson.name)} (${first.number} has the same ${on}.)`
-        : `This customer already has an active lead, ${first.number}, with the same ${on}. Please check the existing lead before proceeding.`;
-    return httpError(409, message, {
-        code: "DUPLICATE_LEAD",
-        details: { duplicates: matches },
-        errors: [{ field: first.matchedOn.includes("phone") ? "customerPhone" : "customerEmail", message }],
-    });
-};
+export const duplicateMode = () =>
+    String(process.env.LEAD_DUPLICATE_CHECK ?? "warn").trim().toLowerCase() === "off" ? "off" : "warn";

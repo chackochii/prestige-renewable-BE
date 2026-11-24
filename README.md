@@ -549,7 +549,7 @@ Migrations `20261114000001`–`20261114000005`. Run `npm run db:migrate`, and on
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LEAD_DUPLICATE_CHECK` | `block` | `block` refuses a staff-entered lead whose phone or email matches an active lead in the unit (409 `DUPLICATE_LEAD`); `warn` creates it and returns `duplicateWarnings`; `off` skips the check. Inbound and public-form leads keep their own handling. |
+| `LEAD_DUPLICATE_CHECK` | `warn` | `warn` saves a staff-entered lead whose phone or email matches an active lead in the unit and returns the matches as `duplicateWarnings` (a duplicate never refuses a lead; the old `block` value reads as `warn`); `off` skips the check. Inbound and public-form leads keep their own handling. |
 | `QUOTE_APPROVAL_REQUIRED` | unset | `true` makes every unit refuse to send a quote version that a Senior Sales Representative has not approved. Per unit: `business_units.metadata.quoteApprovalRequired = true`. Off by default so proposals keep sending until the approval screens ship. |
 | `EQUIPMENT_DEFAULT_MARGIN_PCT` | `20` | The margin applied to equipment without one of its own. |
 | `PIN_SETUP_TOKEN_EXPIRES_IN` | `30m` | How long the token from a temporary-PIN login lasts. |
@@ -587,12 +587,12 @@ Migration `20261117000001`. A password an administrator sets — adding the user
 
 | Method | Route | Permission | Body → returns |
 |---|---|---|---|
-| `POST` | `/api/opportunities/intake` | `leads.create` | `{ businessUnitId, firstName, lastName, address (string or { line1, suburb, state, postcode }), phone, email, salespersonId \| unassignedReason, …lead fields, allowDuplicate? }` → the lead, assigned. Every missing mandatory field is listed in `errors` |
+| `POST` | `/api/opportunities/intake` | `leads.create` | `{ businessUnitId, firstName, lastName, address (string or { line1, suburb, state, postcode }), phone, email, salespersonId \| unassignedReason, …lead fields }` → the lead, assigned. Every missing mandatory field is listed in `errors` |
 | `GET` | `/api/opportunities/duplicates` | `leads.read` | `?businessUnitId=&phone=&email=&excludeId=` → active leads sharing either |
 | `POST` | `/api/opportunities/:id/reassign-salesperson` | `leads.approve` | `{ salespersonId, reason }` |
 | `GET` | `/api/opportunities/:id/assignments` | read | `{ current, assignedAt, history: [{ kind, from, to, by, reason, at }] }` |
 
-**One lead, one representative.** Once assigned, moving a lead to another representative — through `assign-salesperson`, `PATCH /:id` or the reassign endpoint — needs `leads.approve`; anyone else gets 409 `LEAD_ALREADY_ASSIGNED`: *"This lead has already been assigned to [name]. Please check the existing assignment before proceeding."* **Duplicates** are matched on phone (last nine digits, so `0412 345 678` = `+61 412-345-678`) and email (case ignored), never the name; the 409 `DUPLICATE_LEAD` carries the matches in `details.duplicates`. An edit only re-checks contact details that actually changed. The older `POST /api/opportunities` keeps its looser required fields (what the current form sends).
+**One lead, one representative.** Once assigned, moving a lead to another representative — through `assign-salesperson`, `PATCH /:id` or the reassign endpoint — needs `leads.approve`; anyone else gets 409 `LEAD_ALREADY_ASSIGNED`: *"This lead has already been assigned to [name]. Please check the existing assignment before proceeding."* **Duplicates** are matched on phone (last nine digits, so `0412 345 678` = `+61 412-345-678`) and email (case ignored), never the name. A match never refuses a lead — several leads may share a phone or an email — it comes back as `duplicateWarnings` on the saved lead and is logged on its activity. An edit only re-checks contact details that actually changed. The older `POST /api/opportunities` keeps its looser required fields (what the current form sends).
 
 ### Quote approval (Senior Sales Representative)
 

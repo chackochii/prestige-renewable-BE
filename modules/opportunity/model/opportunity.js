@@ -13,7 +13,8 @@
 // (estimationInput.serviceRequirementOther).
 export const SERVICE_REQUIREMENTS = ["solar", "battery", "ev", "other"];
 export const LEGACY_SERVICE_REQUIREMENTS = ["both"];
-export const STOREY_OPTIONS = ["single", "double"];
+// The building type. "other" is typed in words in estimationInput.buildingTypeDetails.
+export const STOREY_OPTIONS = ["single", "double", "other"];
 export const ROOF_TYPES = ["tin", "tile", "colorbond"];
 export const ELECTRICAL_PHASES = ["1_phase", "3_phase"];
 // The week-based timeframes came in with UAT (Oct 2026); "8_weeks_plus" is no
@@ -36,8 +37,9 @@ export const serviceRequirementKeys = (value) =>
  * prestige-fe/src/constants/estimationInput.js for the same list.
  */
 export const ESTIMATION_INPUT_KEYS = [
-    // Project & site — the "Other" job requirement in words, and a commercial
-    // building's type (warehouse, shopping complex)
+    // Project & site — the "Other" job requirement in words, and the building's
+    // type in words (required for an "other" building type; a commercial
+    // building's — warehouse, shopping complex — otherwise optional)
     "serviceRequirementOther", "buildingTypeDetails",
     "siteType", "preSiteInspectionRequired", "siteCrewAssigneeId", "inspectionStatus",
     "siteVisitCompleted", "sitePhotosOnFile", "roofMeasurements",
@@ -124,6 +126,8 @@ export default (sequelize, DataTypes) => {
             billingSameAsSite: { type: DataTypes.STRING(3), validate: { isIn: [["yes", "no"]] } },
             customerComments: { type: DataTypes.TEXT },
             customerIntentConfirmed: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            // What the customer said that shows they mean to proceed (the checklist's "Genuine interest").
+            customerIntentNotes: { type: DataTypes.TEXT },
             customerBudget: { type: DataTypes.DECIMAL(12, 2) },
             businessOffers: { type: DataTypes.TEXT },
 

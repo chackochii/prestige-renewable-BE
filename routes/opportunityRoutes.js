@@ -103,7 +103,7 @@ router.get("/export/backups", requirePermission("admin.export"), dataExport.back
 //    address, phone, email) and assign it to a sales representative in one
 //    call; duplicates by phone/email are refused (leadIntakeService).
 //  - duplicates: check contact details against the unit's active leads.
-router.post("/intake", requirePermission("leads.create"), requireUnitAccess((req) => req.body?.businessUnitId), leadManagement.intake); // { firstName, lastName, address, phone, email, salespersonId | unassignedReason, businessUnitId, …lead fields, allowDuplicate? }
+router.post("/intake", requirePermission("leads.create"), requireUnitAccess((req) => req.body?.businessUnitId), leadManagement.intake); // { firstName, lastName, address, phone, email, salespersonId | unassignedReason, businessUnitId, …lead fields }
 router.get("/duplicates", read, requireUnitAccess((req) => req.query.businessUnitId), leadManagement.duplicates); // ?businessUnitId=&phone=&email=&excludeId= → { data: [lead], duplicate }
 
 // Deny-by-default unit scoping (ADM excepted): a caller only reaches records
@@ -112,7 +112,7 @@ router.get("/duplicates", read, requireUnitAccess((req) => req.query.businessUni
 // permission check — and the two unit-addressed routes check the id they name.
 router.use("/:id", requireOpportunityAccess);
 
-router.get("/", read, requireUnitAccess((req) => req.query.businessUnitId), getAll); // ?businessUnitId=&stage=&lifecycle=&search=&page=&pageSize=
+router.get("/", read, requireUnitAccess((req) => req.query.businessUnitId), getAll); // ?businessUnitId=&stage=&minStage=&maxStage=&lifecycle=&hasBill=&search=&page=&pageSize=
 router.post("/", requirePermission("leads.create"), requireUnitAccess((req) => req.body?.businessUnitId), create); // lead payload + businessUnitId
 router.get("/:id", readAny, getOne);
 router.patch("/:id", write, update); // lead fields, all optional

@@ -283,6 +283,7 @@ const JOB_FIELDS = [
     f("Customer", "Preferred language", (o) => o.preferredLanguage || "English"),
     f("Customer", "Customer comments", (o) => o.customerComments),
     f("Customer", "Intent confirmed", (o) => o.customerIntentConfirmed, "bool"),
+    f("Customer", "Genuine interest notes", (o) => o.customerIntentNotes),
     f("Customer", "Budget", (o) => o.customerBudget, "money"),
     f("Customer", "Business offers", (o) => o.businessOffers),
 
@@ -317,6 +318,7 @@ const JOB_FIELDS = [
 
     f("Lead checklist", "Job requirement", (o) => o.serviceRequirement),
     f("Lead checklist", "Storeys", (o) => o.propertyStoreys),
+    f("Lead checklist", "Building type details", (o) => o.estimationInput?.buildingTypeDetails),
     f("Lead checklist", "Roof type", (o) => o.roofType),
     f("Lead checklist", "Electrical phase", (o) => o.electricalPhase),
     f("Lead checklist", "Finance assistance", (o) => o.financeAssistance),

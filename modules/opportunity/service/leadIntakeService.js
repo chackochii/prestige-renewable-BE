@@ -25,7 +25,7 @@ const pick = (...values) => values.find((v) => v !== undefined && v !== null && 
  *   firstName | customerFirstName, lastName | customerLastName,
  *   phone | customerPhone, email | customerEmail,
  *   address (a string, or { line1, suburb, state, postcode }) | siteLine1 (+ siteSuburb, siteState, sitePostcode),
- *   salespersonId (required unless unassignedReason is given), businessUnitId, allowDuplicate?
+ *   salespersonId (required unless unassignedReason is given), businessUnitId
  * Every missing mandatory field is reported at once (errors: [{ field, message }]).
  */
 export const intakeLead = async (payload = {}, actor, ctx = null) => {

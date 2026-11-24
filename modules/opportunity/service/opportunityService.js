@@ -21,7 +21,7 @@ import { completeOpenRequote, presentRequote, REQUOTE_INCLUDE } from "./requoteS
 import { advancePermissionFor, isStageNumber, LAST_STAGE, readableStages, RETIRED_STAGES, STAGE_LABELS, viewPermissionFor } from "./stageAccess.js";
 import { pagingOf } from "../../../utils/pagination.js";
 import { unitYear2 } from "../../../utils/unitTime.js";
-import { assertMayChangeSalesperson, canReassign, duplicateError, duplicateMode, findDuplicateLeads, recordAssignment } from "./leadAssignmentService.js";
+import { assertMayChangeSalesperson, duplicateMode, findDuplicateLeads, recordAssignment } from "./leadAssignmentService.js";
 import { diff, recordActivity } from "../../activity/service/activityService.js";
 
 const { Opportunity, BusinessUnit, Referrer, User, Document, sequelize } = db;
@@ -53,7 +53,7 @@ const LEAD_FIELDS = [
     "estimatorId", "salespersonId", "notes",
     // Lead checklist — what sales confirms with the customer before handover.
     "customerFirstName", "customerLastName", "preferredLanguage", "billingSameAsSite",
-    "customerComments", "customerIntentConfirmed", "customerBudget", "businessOffers",
+    "customerComments", "customerIntentConfirmed", "customerIntentNotes", "customerBudget", "businessOffers",
     "serviceRequirement", "propertyStoreys", "roofType", "electricalPhase",
     "financeAssistance", "financeNotes", "siteRequirementsNone", "siteSpecificRequirements",
     "preferredInstallTimeframe", "preferredInstallLocation",
@@ -278,6 +278,22 @@ const statusCondition = (status) => {
 };
 
 /**
+ * hasBill as SQL: whether the record has an electricity bill uploaded — a
+ * document the lead screens show under "bill" (leadAttachmentService
+ * presentAttachment: its category, else the one its type reads as). Quotes →
+ * New quote marks the leads that can be sized from one.
+ */
+const BILL_EXISTS =
+    `EXISTS (SELECT 1 FROM documents d WHERE d.opportunity_id = "Opportunity"."id"` +
+    ` AND (d.category = 'bill' OR (d.category IS NULL AND d.type = 'energy_bill')))`;
+const billCondition = (value) => {
+    const flag = String(value).toLowerCase();
+    if (flag === "1" || flag === "true") return sequelize.literal(BILL_EXISTS);
+    if (flag === "0" || flag === "false") return sequelize.literal(`NOT ${BILL_EXISTS}`);
+    throw httpError(400, "hasBill must be 1 or 0");
+};
+
+/**
  * The Quotes page's figures across every matching record: how many, the value
  * quoted (the accepted value where there is one, the estimate otherwise), and
  * what has been accepted — at approvals or beyond, or won / closed.
@@ -305,12 +321,14 @@ const totalsFor = async (where) => {
 /**
  * The opportunities of one business unit, a page at a time, newest first
  * (most recently created at the top, so a new lead is always on page 1).
- * Filters, all optional: stage, minStage, lifecycle, qualification, ownerId,
- * authorId (who captured it), status (the pipeline card's), search.
+ * Filters, all optional: stage, minStage / maxStage (inclusive — the Lead
+ * Board is 1–5, the Jobs Board 6 on), lifecycle, qualification, ownerId,
+ * authorId (who captured it), status (the pipeline card's), hasBill (1 = an
+ * electricity bill is uploaded, 0 = none), search.
  * totals=1 adds the Quotes page's figures across every matching record.
  */
 export const listOpportunities = async (query = {}, actor = null) => {
-    const { businessUnitId, stage, minStage, lifecycle, qualification, ownerId, authorId, status, search } = query;
+    const { businessUnitId, stage, minStage, maxStage, lifecycle, qualification, ownerId, authorId, status, hasBill, search } = query;
     const where = { businessUnitId: parseId(businessUnitId, "business unit id") };
 
     // A stage somebody cannot read must not reach them as a record, a count or
@@ -338,6 +356,12 @@ export const listOpportunities = async (query = {}, actor = null) => {
         if (!isStageNumber(from)) throw httpError(400, `minStage must be 1–${LAST_STAGE}`);
         conditions.push({ stage: { [Op.gte]: from } });
     }
+    if (maxStage !== undefined && maxStage !== null && maxStage !== "") {
+        const to = Number(maxStage);
+        if (!isStageNumber(to)) throw httpError(400, `maxStage must be 1–${LAST_STAGE}`);
+        conditions.push({ stage: { [Op.lte]: to } });
+    }
+    if (hasBill !== undefined && hasBill !== null && hasBill !== "") conditions.push(billCondition(hasBill));
     const matching = searchCondition(search);
     if (matching) conditions.push(matching);
     // The board's owner filter: whoever is carrying the record, which is the
@@ -434,7 +458,9 @@ export const qualificationChecklistItems = (o, { billDocument = false, skipBills
         missing.push("the job requirement typed in for Other");
     if (isBlank(o.billingSameAsSite)) missing.push("billing address confirmation");
     else if (o.billingSameAsSite === "no" && isBlank(o.customerBillingAddress)) missing.push("billing address");
-    if (isBlank(o.propertyStoreys)) missing.push("house type");
+    if (isBlank(o.propertyStoreys)) missing.push("building type");
+    else if (o.propertyStoreys === "other" && isBlank(o.estimationInput?.buildingTypeDetails))
+        missing.push("the building type typed in for Other");
     if (isBlank(o.roofType)) missing.push("roof type");
     if (isBlank(o.electricalPhase)) missing.push("electrical phase");
     if (!skipBills && !o.energyHasBills && !billDocument) missing.push("electricity bills");
@@ -445,7 +471,9 @@ export const qualificationChecklistItems = (o, { billDocument = false, skipBills
         missing.push("site-specific requirements (or none identified)");
     if (isBlank(o.preferredInstallTimeframe)) missing.push("preferred installation timeframe");
     if (isBlank(o.preferredInstallLocation)) missing.push("preferred installation location");
-    if (!o.customerIntentConfirmed) missing.push("confirmation the customer is genuinely interested");
+    // Notes now (Nov 2026); a lead ticked before the notes existed stays confirmed.
+    if (!o.customerIntentConfirmed && isBlank(o.customerIntentNotes))
+        missing.push("notes on the customer's genuine interest in proceeding");
     if (isBlank(o.customerComments)) missing.push("initial requirements and comments");
     // The source is the answer; the details beside it are optional.
     if (isBlank(o.leadSource)) missing.push("lead source");
@@ -481,12 +509,10 @@ const assertQualificationConsistent = (fields) => {
 // the automated values nobody can pick by hand — and the record points back.
 //
 // Staff-entered leads are checked for duplicates by phone and email
-// (leadAssignmentService.findDuplicateLeads) inside the same transaction, so
-// two creates at once cannot both slip through. LEAD_DUPLICATE_CHECK=block
-// (default) refuses a duplicate unless an authorised user (leads.approve)
-// sends allowDuplicate: true; warn creates it and reports the matches as
-// `duplicateWarnings`; off skips the check. Inbound and public-form leads keep
-// their own duplicate handling.
+// (leadAssignmentService.findDuplicateLeads). A duplicate never refuses the
+// lead: it is saved, the matches come back as `duplicateWarnings` and are
+// logged on its activity (LEAD_DUPLICATE_CHECK=off skips the lookup).
+// Inbound and public-form leads keep their own duplicate handling.
 // `skipDuplicateCheck` is for internal scripts only (the demo pipeline), never a request.
 export const createLead = async (payload = {}, actor, { findDuplicate = null, inbound = null, ctx = null, skipDuplicateCheck = false } = {}) => {
     const unit = await BusinessUnit.findByPk(parseId(payload.businessUnitId, "business unit id"));
@@ -513,7 +539,6 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null, in
     const slaDays = Number(unit.slaDays?.[1] ?? 3);
     const now = new Date();
     const checkDuplicates = !inbound && !findDuplicate && !skipDuplicateCheck && duplicateMode() !== "off";
-    const mayOverride = checkDuplicates && payload.allowDuplicate === true && (await canReassign(actor));
     let duplicateWarnings = null;
     // Lock, number and insert in one transaction so concurrent creates in the
     // same unit queue up and each gets a distinct number.
@@ -526,7 +551,7 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null, in
                 { businessUnitId: unit.id, phone: fields.customerPhone, email: fields.customerEmail, contactPhone: fields.contactPhone, contactEmail: fields.contactEmail },
                 { transaction }
             );
-            if (matches.length && duplicateMode() === "block" && !mayOverride) throw duplicateError(matches);
+            // A shared phone or email never refuses the lead; the matches are reported.
             if (matches.length) duplicateWarnings = matches;
         }
         return Opportunity.create(
@@ -549,7 +574,7 @@ export const createLead = async (payload = {}, actor, { findDuplicate = null, in
     await recordActivity({
         actor, ctx, source: inbound ? "webhook" : findDuplicate ? "public" : null, businessUnitId: opportunity.businessUnitId,
         entityType: "lead", entityId: opportunity.id, entityLabel: opportunity.number, action: "created",
-        meta: { leadSource: opportunity.leadSource, ...(duplicateWarnings ? { duplicateOf: duplicateWarnings.map((d) => d.number), overridden: mayOverride } : {}) },
+        meta: { leadSource: opportunity.leadSource, ...(duplicateWarnings ? { duplicateOf: duplicateWarnings.map((d) => d.number) } : {}) },
     });
     const created = await getOpportunity(opportunity.id);
     if (duplicateWarnings) created.duplicateWarnings = duplicateWarnings;
@@ -568,7 +593,7 @@ export const updateLead = async (id, payload = {}, actor, ctx = null) => {
     // is a reassignment, for authorised users only (leadAssignmentService).
     if (fields.salespersonId !== undefined) await assertMayChangeSalesperson(opportunity, fields.salespersonId === "" ? null : fields.salespersonId, actor);
     // New contact details are checked against the unit's other active leads —
-    // only when they actually change, so saving an old record is never refused.
+    // only when they actually change. A match never refuses the save; it is reported.
     const CONTACT_KEYS = ["customerPhone", "customerEmail", "contactPhone", "contactEmail"];
     const contactChanged = CONTACT_KEYS.some((key) => fields[key] !== undefined && String(fields[key] ?? "").trim() !== String(opportunity[key] ?? "").trim());
     let duplicateWarnings = null;
@@ -578,7 +603,6 @@ export const updateLead = async (id, payload = {}, actor, ctx = null) => {
             businessUnitId: opportunity.businessUnitId, phone: changed.customerPhone, email: changed.customerEmail,
             contactPhone: changed.contactPhone, contactEmail: changed.contactEmail, excludeId: opportunity.id,
         });
-        if (matches.length && duplicateMode() === "block" && !(payload.allowDuplicate === true && (await canReassign(actor)))) throw duplicateError(matches);
         if (matches.length) duplicateWarnings = matches;
     }
     if (fields.customerLegalName !== undefined && !fields.customerLegalName?.trim())
